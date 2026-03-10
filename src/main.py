@@ -16,6 +16,7 @@ from src.bot.telegram_bot import build_application
 from scripts.health_ping import run_health_server
 from src.scheduler.engine import get_scheduler
 from scripts.startup_recovery import recover_stuck_tasks
+from src.mcp.tools_registry import init_tools
 
 logger = get_logger(__name__)
 
@@ -69,6 +70,9 @@ def main() -> None:
 
         # Run recovery cleanups
         recover_stuck_tasks()
+
+        # Initialize MCP Tools
+        init_tools()
 
         # Health server runs in a daemon thread
         health_thread = threading.Thread(

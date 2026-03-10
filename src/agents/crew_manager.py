@@ -22,7 +22,10 @@ def _create_langchain_tools(task_id: int) -> list[Tool]:
     mcp_client = get_mcp_client()
     lc_tools = []
 
-    for name, meta in mcp_client._tools.items():
+    tools = mcp_client._tools
+    logger.info("CrewAI loading %d registered MCP tools.", len(tools))
+
+    for name, meta in tools.items():
         # Capture the current name in the closure
         def make_tool(tool_name=name):
             async def _run_tool(**kwargs):
@@ -39,6 +42,7 @@ def _create_langchain_tools(task_id: int) -> list[Tool]:
             )
         )
     return lc_tools
+
 
 
 # Define a lightweight LLM wrapper for CrewAI using our gateway
