@@ -14,34 +14,40 @@ from src.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def _create_langchain_tools(task_id: int) -> list[Tool]:
+from crewai.tools import BaseTool
+
+def _create_langchain_tools(task_id: int) -> list[BaseTool]:
     """
-    Wrap our MCP tools in LangChain Tool objects so CrewAI can use them.
-    We inject the `task_id` so the Approval Gateway knows which task triggered it.
+    Wrap our MCP tools in CrewAI BaseTool objects.
     """
     mcp_client = get_mcp_client()
-    lc_tools = []
-
     tools = mcp_client._tools
     logger.info("CrewAI loading %d registered MCP tools.", len(tools))
+    
+    lc_tools = []
 
     for name, meta in tools.items():
-        # Capture the current name in the closure
-        def make_tool(tool_name=name):
-            async def _run_tool(**kwargs):
-                logger.debug("CrewAI Agent calling tool: %s", tool_name)
-                # Pass through the Approval Gateway
-                return await wrap_tool_execution(tool_name, kwargs, task_id)
-            return _run_tool
+        # Define a dynamic class to satisfy CrewAI's requirement for BaseTool subclasses
+        class MCPWrappedTool(BaseTool):
+            def _run(self, **kwargs: Any) -> Any:
+                import asyncio
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
+                if loop.is_running():
+                    import nest_asyncio
+                    nest_asyncio.apply()
+                
+                return asyncio.run(wrap_tool_execution(self.name, kwargs, task_id))
 
-        lc_tools.append(
-            Tool(
-                name=name,
-                func=make_tool(),
-                description=meta["description"]
-            )
-        )
+        lc_tools.append(MCPWrappedTool(name=name, description=meta["description"]))
+        
     return lc_tools
+
+
 
 
 
