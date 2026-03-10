@@ -10,6 +10,42 @@ A powerful, LLM-powered personal assistant integrated with Telegram, featuring l
 - **Scheduling**: Create and manage recurring jobs using natural language (powered by APScheduler).
 - **Tool Integration**: Capabilities for web searching, email reading, and calendar management.
 - **Admin Security**: Strict admin-only access controlled by Telegram User ID.
++
++## 🏗 Architecture
++
++The bot follows a modular, phase-based architecture designed for scalability and transparency.
++
++### Request Flow
++
++```mermaid
++graph TD
++    User((User)) <--> Bot[Telegram Bot]
++    Bot --> Router{Intent Classifier}
++    
++    Router -->|Simple| LLM[LLM Gateway]
++    Router -->|Complex| Crew[CrewAI Pipeline]
++    Router -->|Scheduled| Sched[APScheduler]
++    
++    Crew --> LLM
++    Sched --> LLM
++    
++    LLM <--> Providers[LLM Providers API]
++    
++    Router -.-> Enricher[Context Enricher]
++    Enricher <--> Memory[(Long-Term Memory)]
++    Enricher <--> Hist[(PostgreSQL History)]
++    
++    Crew -.-> Approval[Approval Queue]
++```
++
++### Core Components
++
++- **Router**: Classifies user intent (simple response, complex multi-step task, or scheduled job).
++- **Context Enricher**: Enhances prompts by retrieving relevant facts from Long-Term Memory (pgvector) and recent conversation history.
++- **LLM Gateway**: A unified interface (via LiteLLM) for interacting with various AI providers with built-in retry logic and token tracking.
++- **CrewAI Pipeline**: Orchestrates autonomous agents for complex tasks requiring research or multi-tool usage.
++- **Memory Engine**: Background processes that extract permanent facts from conversations and store them in a vector database.
+
 
 ## 🛠 Tech Stack
 
