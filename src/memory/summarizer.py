@@ -2,8 +2,8 @@
 src/memory/summarizer.py — Compress long conversations via LLM
 """
 
-from sqlalchemy import text
 from src.db.connection import get_db
+from src.db.models import Summary, Conversation
 from src.utils.logging import get_logger
 from src.utils.tokens import count_tokens
 
@@ -42,23 +42,24 @@ async def summarize_session(session_id: str, messages: list[dict]) -> str | None
 
         with get_db() as db:
             # Save summary
-            row = db.execute(
-                text(
-                    "INSERT INTO summaries (session_id, content, tokens) "
-                    "VALUES (:sid, :content, :tokens) RETURNING id"
-                ),
-                {"sid": session_id, "content": summary_text, "tokens": tokens},
-            ).fetchone()
-            summary_id = row[0]
+            summary = Summary(
+                session_id=session_id,
+                content=summary_text,
+                tokens=tokens
+            )
+            db.add(summary)
+            db.commit()
+            db.refresh(summary)
 
             # Mark messages as summarized
-            db.execute(
-                text(
-                    "UPDATE conversations SET summarized = TRUE, summary_id = :sid2 "
-                    "WHERE session_id = :sid AND summarized = FALSE"
-                ),
-                {"sid2": summary_id, "sid": session_id},
-            )
+            db.query(Conversation).filter(
+                Conversation.session_id == session_id,
+                Conversation.summarized == False
+            ).update({
+                Conversation.summarized: True,
+                Conversation.summary_id: summary.id
+            }, synchronize_session=False)
+            db.commit()
 
         logger.info("Summarized session %s → %d tokens", session_id[:8], tokens)
         return summary_text

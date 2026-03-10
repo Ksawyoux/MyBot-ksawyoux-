@@ -1,10 +1,8 @@
 from typing import Optional, List, Dict, Any
 import json
-from sqlalchemy.orm import Session
-from sqlalchemy import text
-
 from src.output.core.envelope import OutputEnvelope
 from src.db.connection import get_db
+from src.db.models import TaskModel, OutputHistory
 
 class OutputRepository:
     """Handles persistence of output envelopes to the database"""
@@ -18,44 +16,37 @@ class OutputRepository:
             envelope_dict = envelope.model_dump(mode='json')
             
             # 1. Update tasks table
-            db.execute(text("""
-                UPDATE tasks 
-                SET output_data = :output_data, 
-                    output_text = :output_text 
-                WHERE id = :task_id
-            """), {
-                "output_data": json.dumps(envelope_dict),
-                "output_text": envelope.content.primary.text or "",
-                "task_id": envelope.task_id
-            })
+            task = db.query(TaskModel).filter(TaskModel.id == int(envelope.task_id)).first()
+            if task:
+                task.output_data = envelope_dict
+                task.output_text = envelope.content.primary.text or ""
             
             # 2. Insert into output_history
-            db.execute(text("""
-                INSERT INTO output_history 
-                (task_id, sequence_number, output_envelope, rendered_for, telegram_msg_id) 
-                VALUES (:task_id, :sequence_number, :output_envelope, :rendered_for, :telegram_msg_id)
-            """), {
-                "task_id": envelope.task_id,
-                "sequence_number": envelope.sequence_number,
-                "output_envelope": json.dumps(envelope_dict),
-                "rendered_for": platform,
-                "telegram_msg_id": platform_msg_id
-            })
+            history = OutputHistory(
+                task_id=int(envelope.task_id),
+                sequence_number=envelope.sequence_number,
+                output_envelope=envelope_dict,
+                rendered_for=platform,
+                telegram_msg_id=int(platform_msg_id) if platform_msg_id and platform_msg_id.isdigit() else None
+            )
+            db.add(history)
             
             db.commit()
             return True
 
     def get_latest_by_task(self, task_id: str) -> Optional[OutputEnvelope]:
         """Retrieves the latest output for a task"""
-        with get_db() as db:
-            result = db.execute(text("""
-                SELECT output_envelope 
-                FROM output_history 
-                WHERE task_id = :task_id 
-                ORDER BY sequence_number DESC, created_at DESC 
-                LIMIT 1
-            """), {"task_id": task_id}).fetchone()
+        if not task_id or not task_id.isdigit():
+            return None
             
-            if result and result[0]:
-                return OutputEnvelope.model_validate(result[0])
+        with get_db() as db:
+            result = db.query(OutputHistory).filter(
+                OutputHistory.task_id == int(task_id)
+            ).order_by(
+                OutputHistory.sequence_number.desc(),
+                OutputHistory.created_at.desc()
+            ).first()
+            
+            if result and result.output_envelope:
+                return OutputEnvelope.model_validate(result.output_envelope)
             return None

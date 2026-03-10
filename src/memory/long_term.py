@@ -5,8 +5,8 @@ src/memory/long_term.py — Semantic search over long-term facts and summaries
 import json
 from typing import Optional
 
-from sqlalchemy import text
 from src.db.connection import get_db
+from src.db.models import MemoryEmbedding
 from src.utils.embeddings import generate_embedding
 from src.utils.logging import get_logger
 
@@ -24,20 +24,16 @@ async def store_long_term_memory(
 
     try:
         with get_db() as db:
-            row = db.execute(
-                text(
-                    "INSERT INTO memory_embeddings (content, embedding, metadata, type) "
-                    "VALUES (:content, :emb, :meta, :type) RETURNING id"
-                ),
-                {
-                    "content": content,
-                    # Convert list to string format required by pgvector: '[1.1, 2.2, ...]'
-                    "emb": f"[{','.join(str(f) for f in vector)}]",
-                    "meta": json.dumps(metadata),
-                    "type": memory_type,
-                },
-            ).fetchone()
-            return row[0] if row else -1
+            mem = MemoryEmbedding(
+                content=content,
+                embedding=vector,
+                metadata_json=metadata,
+                type=memory_type
+            )
+            db.add(mem)
+            db.commit()
+            db.refresh(mem)
+            return mem.id
     except Exception as exc:
         logger.error("Failed to store long-term memory: %s", exc)
         return -1
@@ -53,27 +49,27 @@ async def search_memory(query_text: str, limit: int = 5, threshold: float = 0.5)
         return []
 
     try:
-        v_str = f"[{','.join(str(f) for f in vector)}]"
         with get_db() as db:
-            rows = db.execute(
-                text(
-                    "SELECT id, content, metadata, type, embedding <=> :emb AS distance "
-                    "FROM memory_embeddings "
-                    "WHERE embedding <=> :emb <= :thresh "
-                    "ORDER BY distance ASC LIMIT :lim"
-                ),
-                {"emb": v_str, "thresh": threshold, "lim": limit},
-            ).fetchall()
+            distance_col = MemoryEmbedding.embedding.cosine_distance(vector).label("distance")
+            rows = db.query(
+                MemoryEmbedding.id,
+                MemoryEmbedding.content,
+                MemoryEmbedding.metadata_json,
+                MemoryEmbedding.type,
+                distance_col
+            ).filter(
+                MemoryEmbedding.embedding.cosine_distance(vector) <= threshold
+            ).order_by(distance_col).limit(limit).all()
 
             results = []
             for r in rows:
                 results.append(
                     {
-                        "id": r[0],
-                        "content": r[1],
-                        "metadata": r[2],
-                        "type": r[3],
-                        "distance": float(r[4]),
+                        "id": r.id,
+                        "content": r.content,
+                        "metadata": r.metadata_json,
+                        "type": r.type,
+                        "distance": r.distance,
                     }
                 )
             return results

@@ -7,9 +7,10 @@ import json
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import text
 from src.db.connection import get_db
+from src.db.models import Cache
 from src.utils.logging import get_logger
+from sqlalchemy import func
 
 logger = get_logger(__name__)
 
@@ -27,21 +28,19 @@ def get_cached_response(messages: list[dict], model: str) -> Optional[str]:
     key = _hash_messages(messages, model)
     try:
         with get_db() as db:
-            row = db.execute(
-                text(
-                    "SELECT response FROM cache "
-                    "WHERE prompt_hash = :h AND (expires_at IS NULL OR expires_at > NOW())"
-                ),
-                {"h": key},
-            ).fetchone()
-            if row:
+            now = datetime.utcnow()
+            cache_entry = db.query(Cache).filter(
+                Cache.prompt_hash == key,
+                (Cache.expires_at == None) | (Cache.expires_at > now)
+            ).first()
+            
+            if cache_entry:
                 # Bump hit count
-                db.execute(
-                    text("UPDATE cache SET hit_count = hit_count + 1, last_hit = NOW() WHERE prompt_hash = :h"),
-                    {"h": key},
-                )
+                cache_entry.hit_count += 1
+                cache_entry.last_hit = func.now()
+                db.commit()
                 logger.debug("Cache HIT for hash %s", key[:8])
-                return row[0]
+                return cache_entry.response
     except Exception as exc:
         logger.warning("Cache lookup failed: %s", exc)
     return None
@@ -61,22 +60,26 @@ def store_cached_response(messages: list[dict], model: str, response: str, token
             
     try:
         with get_db() as db:
-            db.execute(
-                text(
-                    "INSERT INTO cache (prompt_hash, prompt_preview, response, model_used, tokens_saved, expires_at) "
-                    "VALUES (:h, :preview, :resp, :model, :tokens, :exp) "
-                    "ON CONFLICT (prompt_hash) DO UPDATE "
-                    "SET response = EXCLUDED.response, expires_at = EXCLUDED.expires_at, last_hit = NOW()"
-                ),
-                {
-                    "h": key,
-                    "preview": preview,
-                    "resp": response,
-                    "model": model,
-                    "tokens": tokens_saved,
-                    "exp": expires,
-                },
-            )
+            # Upsert using query and update/insert
+            cache_entry = db.query(Cache).filter(Cache.prompt_hash == key).first()
+            if cache_entry:
+                cache_entry.response = response
+                cache_entry.expires_at = expires
+                cache_entry.last_hit = func.now()
+                cache_entry.prompt_preview = preview
+                cache_entry.model_used = model
+                cache_entry.tokens_saved = tokens_saved
+            else:
+                cache_entry = Cache(
+                    prompt_hash=key,
+                    prompt_preview=preview,
+                    response=response,
+                    model_used=model,
+                    tokens_saved=tokens_saved,
+                    expires_at=expires
+                )
+                db.add(cache_entry)
+            db.commit()
         logger.debug("Cache STORE for hash %s", key[:8])
     except Exception as exc:
         logger.warning("Cache store failed: %s", exc)
@@ -86,13 +89,13 @@ def get_cache_stats() -> dict:
     """Return cache statistics for /status command."""
     try:
         with get_db() as db:
-            row = db.execute(
-                text("SELECT COUNT(*), COALESCE(SUM(hit_count), 0), COALESCE(SUM(tokens_saved), 0) FROM cache")
-            ).fetchone()
+            count = db.query(func.count(Cache.id)).scalar() or 0
+            hits = db.query(func.sum(Cache.hit_count)).scalar() or 0
+            tokens = db.query(func.sum(Cache.tokens_saved)).scalar() or 0
             return {
-                "entries": row[0] or 0,
-                "total_hits": row[1] or 0,
-                "tokens_saved": row[2] or 0,
+                "entries": count,
+                "total_hits": int(hits),
+                "tokens_saved": int(tokens),
             }
     except Exception as exc:
         logger.warning("Cache stats query failed: %s", exc)

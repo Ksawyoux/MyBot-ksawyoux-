@@ -6,10 +6,11 @@ import json
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import text
 from src.config.settings import APPROVAL_TIMEOUT_HOURS
 from src.db.connection import get_db
+from src.db.models import Approval
 from src.utils.logging import get_logger
+from sqlalchemy import func
 
 logger = get_logger(__name__)
 
@@ -21,20 +22,17 @@ def create_approval_request(
     expires = datetime.utcnow() + timedelta(hours=APPROVAL_TIMEOUT_HOURS)
     try:
         with get_db() as db:
-            row = db.execute(
-                text(
-                    "INSERT INTO approvals (task_id, action_type, description, preview_data, expires_at) "
-                    "VALUES (:tid, :act, :desc, :prev, :exp) RETURNING id"
-                ),
-                {
-                    "tid": task_id,
-                    "act": action_type,
-                    "desc": description,
-                    "prev": json.dumps(preview_data),
-                    "exp": expires,
-                },
-            ).fetchone()
-            return row[0] if row else -1
+            app = Approval(
+                task_id=task_id,
+                action_type=action_type,
+                description=description,
+                preview_data=preview_data,
+                expires_at=expires
+            )
+            db.add(app)
+            db.commit()
+            db.refresh(app)
+            return app.id
     except Exception as exc:
         logger.error("Failed to create approval request: %s", exc)
         return -1
@@ -44,10 +42,10 @@ def set_approval_message_id(approval_id: int, message_id: int) -> None:
     """Save the Telegram message ID so we can edit it later."""
     try:
         with get_db() as db:
-            db.execute(
-                text("UPDATE approvals SET telegram_msg_id = :msg_id WHERE id = :id"),
-                {"msg_id": message_id, "id": approval_id},
-            )
+            app = db.query(Approval).filter(Approval.id == approval_id).first()
+            if app:
+                app.telegram_msg_id = message_id
+                db.commit()
     except Exception as exc:
         logger.error("Failed to set approval msg ID: %s", exc)
 
@@ -56,14 +54,12 @@ def update_approval_status(approval_id: int, status: str) -> None:
     """Mark an approval as approved, rejected, or expired."""
     try:
         with get_db() as db:
-            db.execute(
-                text(
-                    "UPDATE approvals SET status = :status, responded_at = NOW() "
-                    "WHERE id = :id AND status = 'pending'"
-                ),
-                {"status": status, "id": approval_id},
-            )
-            logger.info("Approval %d marked as %s", approval_id, status)
+            app = db.query(Approval).filter(Approval.id == approval_id, Approval.status == 'pending').first()
+            if app:
+                app.status = status
+                app.responded_at = func.now()
+                db.commit()
+                logger.info("Approval %d marked as %s", approval_id, status)
     except Exception as exc:
         logger.error("Failed to update approval %d status: %s", approval_id, exc)
 
@@ -72,23 +68,22 @@ def get_pending_approvals() -> list[dict]:
     """Fetch all pending, non-expired approvals for the /pending command."""
     try:
         with get_db() as db:
-            rows = db.execute(
-                text(
-                    "SELECT id, task_id, action_type, description, requested_at, expires_at "
-                    "FROM approvals WHERE status = 'pending' AND expires_at > NOW() "
-                    "ORDER BY requested_at ASC"
-                )
-            ).fetchall()
+            now = datetime.utcnow()
+            approvals = db.query(Approval).filter(
+                Approval.status == 'pending',
+                Approval.expires_at > now
+            ).order_by(Approval.requested_at.asc()).all()
+            
             return [
                 {
-                    "id": r[0],
-                    "task_id": r[1],
-                    "action_type": r[2],
-                    "description": r[3],
-                    "requested_at": str(r[4]),
-                    "expires_at": str(r[5]),
+                    "id": a.id,
+                    "task_id": a.task_id,
+                    "action_type": a.action_type,
+                    "description": a.description,
+                    "requested_at": str(a.requested_at),
+                    "expires_at": str(a.expires_at),
                 }
-                for r in rows
+                for a in approvals
             ]
     except Exception as exc:
         logger.error("Failed to fetch pending approvals: %s", exc)
@@ -98,18 +93,15 @@ def get_approval(approval_id: int) -> Optional[dict]:
     """Fetch details of a specific approval."""
     try:
         with get_db() as db:
-            row = db.execute(
-                text("SELECT id, task_id, action_type, description, preview_data, status FROM approvals WHERE id = :id"),
-                {"id": approval_id}
-            ).fetchone()
-            if row:
+            app = db.query(Approval).filter(Approval.id == approval_id).first()
+            if app:
                 return {
-                    "id": row[0],
-                    "task_id": row[1],
-                    "action_type": row[2],
-                    "description": row[3],
-                    "preview_data": json.loads(row[4]) if row[4] else {},
-                    "status": row[5]
+                    "id": app.id,
+                    "task_id": app.task_id,
+                    "action_type": app.action_type,
+                    "description": app.description,
+                    "preview_data": app.preview_data or {},
+                    "status": app.status
                 }
     except Exception as exc:
         logger.error("Failed to fetch approval %d: %s", approval_id, exc)

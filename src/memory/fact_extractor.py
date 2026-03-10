@@ -3,8 +3,8 @@ src/memory/fact_extractor.py — Extract permanent facts from conversations
 """
 
 import json
-from sqlalchemy import text
 from src.db.connection import get_db
+from src.db.models import Fact
 from src.memory.long_term import store_long_term_memory
 from src.utils.logging import get_logger
 
@@ -66,34 +66,36 @@ async def extract_and_store_facts(session_id: str, messages: list[dict]) -> int:
 
         saved = 0
         with get_db() as db:
-            for fact in parsed:
-                cat = fact.get("category", "knowledge")
-                key = fact.get("key", "unknown")
-                val = fact.get("value", "")
+            for fact_data in parsed:
+                cat = fact_data.get("category", "knowledge")
+                key = fact_data.get("key", "unknown")
+                val = fact_data.get("value", "")
 
                 if not val:
                     continue
 
                 # Quick conflict check (skip exact matches)
-                exist = db.execute(
-                    text(
-                        "SELECT id FROM facts WHERE category = :cat AND key = :key AND value = :val AND superseded_by IS NULL"
-                    ),
-                    {"cat": cat, "key": key, "val": val},
-                ).fetchone()
+                exist = db.query(Fact).filter(
+                    Fact.category == cat,
+                    Fact.key == key,
+                    Fact.value == val,
+                    Fact.superseded_by == None
+                ).first()
 
                 if exist:
                     continue
 
                 # Save fact
-                row = db.execute(
-                    text(
-                        "INSERT INTO facts (category, key, value, source_session) "
-                        "VALUES (:cat, :key, :val, :sid) RETURNING id"
-                    ),
-                    {"cat": cat, "key": key, "val": val, "sid": session_id},
-                ).fetchone()
-                fact_id = row[0]
+                fact = Fact(
+                    category=cat,
+                    key=key,
+                    value=val,
+                    source_session=session_id
+                )
+                db.add(fact)
+                db.commit()
+                db.refresh(fact)
+                fact_id = fact.id
 
                 # Store vector embedding
                 await store_long_term_memory(
