@@ -31,6 +31,6 @@ def create_email_task(agent: Agent, instruction: str) -> Task:
     """Create a generic task for the email agent."""
     return Task(
         description=instruction,
-        expected_output="A clear summary of actions taken, emails read, or drafts prepared.",
+        expected_output="A clear summary of actions taken, emails read, drafts prepared, OR a confirmation that the action was sent to the human approval queue.",
         agent=agent
     )

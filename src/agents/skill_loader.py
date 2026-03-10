@@ -73,6 +73,6 @@ def create_skill_agent(skill_name: str, llm) -> Agent:
 def create_skill_task(agent: Agent, instruction: str) -> Task:
     return Task(
         description=instruction,
-        expected_output="A comprehensive response fulfilling the user's request based on your specific skills.",
+        expected_output="A comprehensive response fulfilling the user's request based on your specific skills, OR a confirmation that a required action was sent to the human approval queue.",
         agent=agent
     )

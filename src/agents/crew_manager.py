@@ -27,8 +27,45 @@ def _create_langchain_tools(task_id: int) -> list[BaseTool]:
     lc_tools = []
 
     for name, meta in tools.items():
+        # Build Pydantic args_schema manually from JSON Schema parameters
+        from pydantic import create_model
+        from typing import Optional
+        fields = {}
+        schema = meta.get("parameters", {})
+        properties = schema.get("properties", {})
+        required_fields = schema.get("required", [])
+        
+        for prop_name, prop_info in properties.items():
+            prop_type_str = prop_info.get("type", "string")
+            type_mapping = {
+                "string": str,
+                "integer": int,
+                "number": float,
+                "boolean": bool,
+                "array": list,
+                "object": dict
+            }
+            prop_type = type_mapping.get(prop_type_str, Any)
+            description = prop_info.get("description", "")
+            
+            if prop_name in required_fields:
+                fields[prop_name] = (prop_type, Field(..., description=description))
+            else:
+                opt_type = Optional[prop_type]
+                default_val = prop_info.get("default", None)
+                fields[prop_name] = (opt_type, Field(default_val, description=description))
+                
+        # Must be careful not to reuse the same class name incorrectly, use a unique name
+        tool_schema_name = "".join(part.capitalize() for part in name.split("_")) + "Schema"
+        SchemaClass = create_model(tool_schema_name, **fields)
+
         # Define a dynamic class to satisfy CrewAI's requirement for BaseTool subclasses
+        # We must use a unique class name or just subclass locally
+        custom_tool_name = "".join(part.capitalize() for part in name.split("_")) + "Tool"
+        
         class MCPWrappedTool(BaseTool):
+            args_schema: type[BaseModel] = SchemaClass
+
             def _run(self, **kwargs: Any) -> Any:
                 import asyncio
                 try:
@@ -41,7 +78,21 @@ def _create_langchain_tools(task_id: int) -> list[BaseTool]:
                     import nest_asyncio
                     nest_asyncio.apply()
                 
-                return asyncio.run(wrap_tool_execution(self.name, kwargs, task_id))
+                # We can access `self.name` because it is set by BaseTool __init__
+                result = asyncio.run(wrap_tool_execution(self.name, kwargs, task_id))
+                
+                if isinstance(result, dict) and result.get("status") == "pending_approval":
+                    return (
+                        f"Action '{self.name}' has been intercepted and requires human approval. "
+                        f"Approval ID: {result.get('approval_id')}. "
+                        "Do NOT retry this action. "
+                        "Please provide your Final Answer confirming that the action has been submitted for approval."
+                    )
+                import json
+                return json.dumps(result) if isinstance(result, dict) else str(result)
+        
+        # Override the __name__ to be unique
+        MCPWrappedTool.__name__ = custom_tool_name
 
         lc_tools.append(MCPWrappedTool(name=name, description=meta["description"]))
         

@@ -24,6 +24,6 @@ def create_research_agent(llm) -> Agent:
 def create_research_task(agent: Agent, instruction: str) -> Task:
     return Task(
         description=instruction,
-        expected_output="A comprehensive, factual report fulfilling the research objective.",
+        expected_output="A comprehensive, factual report fulfilling the research objective, OR a confirmation that a required action was sent to the human approval queue.",
         agent=agent
     )

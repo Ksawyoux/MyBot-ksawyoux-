@@ -86,7 +86,7 @@ class StructuredResultTemplate(BaseTemplate):
             ))
         else:
             # Fallback to plain text
-            primary_text = str(parsed_data)
+            primary_text = str(parsed_data) if str(parsed_data).strip() else "No specific output was returned."
 
         return OutputEnvelope(
             task_id=self.task_id,

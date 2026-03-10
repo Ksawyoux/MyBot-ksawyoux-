@@ -355,13 +355,31 @@ async def approval_callback_handler(update: Update, context: ContextTypes.DEFAUL
         app_id = int(data.split("_")[1])
         update_approval_status(app_id, "approved")
         
-        # Phase 6/7 stub: When CrewAI/Scheduler sees this status=approved in DB, 
-        # it will proceed with the suspended task.
+        from src.approval.queue import get_approval
+        app_data = get_approval(app_id)
+        execution_result = ""
+        if app_data:
+            try:
+                from src.mcp.client import get_mcp_client
+                client = get_mcp_client()
+                logger.info("Executing approved action '%s'", app_data['action_type'])
+                result = await client.call_tool(app_data['action_type'], app_data['preview_data'])
+                
+                # Check if result is a dict to extract message
+                if isinstance(result, dict) and "message" in result:
+                    execution_result = f"\n*Result:* {result['message']}"
+                elif isinstance(result, dict) and "error" in result:
+                    execution_result = f"\n*Result:* Error - {result['error']}"
+                else:
+                    execution_result = "\n*Result:* Execution triggered successfully."
+            except Exception as e:
+                logger.error("Failed to execute approved action: %s", e)
+                execution_result = f"\n*Result:* Failed to execute - {str(e)}"
         
         # Update message
         original_text = query.message.text or f"Approval #{app_id}"
         await query.edit_message_text(
-            text=f"{original_text}\n\n*Status:* ✅ Approved",
+            text=f"{original_text}\n\n*Status:* ✅ Approved{execution_result}",
             parse_mode="Markdown",
             reply_markup=get_resolved_keyboard("approved")
         )

@@ -93,3 +93,24 @@ def get_pending_approvals() -> list[dict]:
     except Exception as exc:
         logger.error("Failed to fetch pending approvals: %s", exc)
         return []
+
+def get_approval(approval_id: int) -> Optional[dict]:
+    """Fetch details of a specific approval."""
+    try:
+        with get_db() as db:
+            row = db.execute(
+                text("SELECT id, task_id, action_type, description, preview_data, status FROM approvals WHERE id = :id"),
+                {"id": approval_id}
+            ).fetchone()
+            if row:
+                return {
+                    "id": row[0],
+                    "task_id": row[1],
+                    "action_type": row[2],
+                    "description": row[3],
+                    "preview_data": json.loads(row[4]) if row[4] else {},
+                    "status": row[5]
+                }
+    except Exception as exc:
+        logger.error("Failed to fetch approval %d: %s", approval_id, exc)
+    return None

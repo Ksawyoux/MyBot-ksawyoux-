@@ -24,6 +24,6 @@ def create_calendar_agent(llm) -> Agent:
 def create_calendar_task(agent: Agent, instruction: str) -> Task:
     return Task(
         description=instruction,
-        expected_output="Confirmation of calendar events retrieved or scheduled.",
+        expected_output="Confirmation of calendar events retrieved or scheduled, OR a confirmation that the action was sent to the human approval queue.",
         agent=agent
     )
