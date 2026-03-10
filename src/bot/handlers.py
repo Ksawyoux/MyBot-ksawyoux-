@@ -40,6 +40,7 @@ from src.output.builder import OutputBuilder
 from src.output.rendering.telegram_renderer import TelegramRenderer
 from src.output.storage.repository import OutputRepository
 from src.output.templates.responses.simple_answer import SimpleAnswerTemplate
+from src.output.templates.responses.structured_result import StructuredResultTemplate
 from src.output.templates.errors.error import ErrorTemplate
 from src.output.core.types import TransparencyTier
 from src.output.core.actions import Action, ActionHandler, ActionType
@@ -445,11 +446,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 # Phase 6: Execute via CrewAI
                 from src.agents.crew_manager import execute_crew_task
                 crew_result = await execute_crew_task(classification["intent"], enriched_prompt, task_id)
-                response_text = "🛠️ *Complex Task Completed*\n\n" + crew_result
+                response_text = crew_result
                 model_used = "crewai-pipeline"
                 tokens_used = 0 
                 
-                output = OutputBuilder().task_id(str(task_id)).type("response").category("complex").status("completed").content_text(response_text).build()
+                output = StructuredResultTemplate(data=response_text, task_id=str(task_id)).render()
+                output.metadata = {"model": model_used}
                 
             except (ImportError, ModuleNotFoundError):
                 logger.warning("CrewAI not installed. Falling back to capable LLM for complex task.")
