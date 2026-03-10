@@ -6,7 +6,7 @@ from typing import Optional
 
 MODEL_TIERS: dict = {
     "lightweight": {
-        "primary": "google/gemma-2-9b-it",
+        "primary": "meta-llama/llama-3.1-8b-instruct",
         "fallback": "mistralai/mistral-7b-instruct:free",
         "tasks": ["classification", "simple_qa", "formatting", "intent_parsing"],
         "max_tokens": 1024,

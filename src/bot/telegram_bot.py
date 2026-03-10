@@ -25,7 +25,22 @@ logger = get_logger(__name__)
 async def post_init(app: Application) -> None:
     import asyncio
     from src.llm.request_queue import get_request_queue
+    from telegram import BotCommand
+    
     get_request_queue().start(asyncio.get_running_loop())
+    
+    commands = [
+        BotCommand("start", "Initialize bot"),
+        BotCommand("help", "Show available commands"),
+        BotCommand("status", "System status & stats"),
+        BotCommand("tasks", "Recent task history"),
+        BotCommand("pending", "Pending approvals"),
+        BotCommand("memory", "Memory stats"),
+        BotCommand("forget", "Remove a fact <id>"),
+        BotCommand("schedule", "Manage scheduled jobs"),
+        BotCommand("cancel", "Cancel current operation"),
+    ]
+    await app.bot.set_my_commands(commands)
 
 
 def build_application() -> Application:

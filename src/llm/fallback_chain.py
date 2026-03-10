@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 
 
 async def _call_openrouter(
-    model: str, messages: list[dict], max_tokens: int
+    model: str, messages: list[dict], max_tokens: int, response_format: Optional[dict] = None
 ) -> tuple[str, int]:
     """
     Make a single OpenRouter chat completion call.
@@ -40,6 +40,9 @@ async def _call_openrouter(
             "messages": messages,
             "max_tokens": max_tokens,
         }
+        if response_format:
+            payload["response_format"] = response_format
+            
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
                 f"{OPENROUTER_BASE_URL}/chat/completions",
@@ -64,6 +67,7 @@ async def call_with_fallback(
     primary_model: str,
     fallback_model: Optional[str],
     max_tokens: int,
+    response_format: Optional[dict] = None,
 ) -> tuple[str, str, int]:
     """
     Try primary model; fall back to fallback_model on 429/5xx.
@@ -75,7 +79,7 @@ async def call_with_fallback(
     for model in filter(None, [primary_model, fallback_model]):
         try:
             logger.debug("Calling model: %s", model)
-            text, tokens = await _call_openrouter(model, messages, max_tokens)
+            text, tokens = await _call_openrouter(model, messages, max_tokens, response_format)
             logger.info("LLM call OK | model=%s tokens=%d", model, tokens)
             return text, model, tokens
         except httpx.HTTPStatusError as exc:
@@ -99,6 +103,7 @@ async def stream_with_fallback(
     primary_model: str,
     fallback_model: Optional[str],
     max_tokens: int,
+    response_format: Optional[dict] = None,
 ):
     """
     Like call_with_fallback, but yields (chunk_text, model_used).
@@ -107,7 +112,7 @@ async def stream_with_fallback(
     But we expose the async generator signature so the caller can stream.
     """
     text, model, tokens = await call_with_fallback(
-        messages, primary_model, fallback_model, max_tokens
+        messages, primary_model, fallback_model, max_tokens, response_format
     )
     # Simulate a stream by yielding the whole thing. 
     # To truly stream, we'd use httpx astream() and map SSE events.

@@ -22,6 +22,7 @@ async def complete(
     conversation_history: Optional[list[dict]] = None,
     use_cache: bool = True,
     priority: int = PRIORITY_BACKGROUND,
+    response_format: Optional[dict] = None,
 ) -> dict:
     """
     Single entry point for all LLM calls.
@@ -41,7 +42,7 @@ async def complete(
         messages.append({"role": "user", "content": prompt})
 
         # ── Cache check ──────────────────────────────────────────────────────────
-        if use_cache:
+        if use_cache and not response_format: # Don't cache JSON-formatted responses for now to avoid mismatch
             cached = get_cached_response(messages, primary_model)
             if cached:
                 return {
@@ -59,6 +60,7 @@ async def complete(
             primary_model=primary_model,
             fallback_model=fallback_model,
             max_tokens=max_tokens,
+            response_format=response_format,
         )
         latency_ms = int((time.monotonic() - start) * 1000)
 
@@ -68,7 +70,7 @@ async def complete(
         )
 
         # ── Store in cache ────────────────────────────────────────────────────────
-        if use_cache:
+        if use_cache and not response_format:
             store_cached_response(messages, primary_model, response_text, tokens_saved=tokens)
 
         return {

@@ -8,20 +8,33 @@ from src.utils.logging import get_logger
 logger = get_logger(__name__)
 
 INTENT_SYSTEM_PROMPT = """
-You are a categorization engine for an AI assistant.
+You are a categorization engine for an AI assistant. You do not converse. You only output JSON.
 Analyze the user's message and determine the intent.
 Return ONLY a valid JSON object matching this schema:
 {
   "action": "question|email|calendar|search|schedule|other",
   "urgency": "high|normal|low",
-  "entities": ["list", "of", "key", "entities", "mentioned"],
+  "entities": ["list", "of", "key", "entities"],
   "complexity_hint": "simple|complex"
 }
-Rules:
-- ALWAYS use "complex" for ANY "email", "calendar" or "search" action.
-- Use "simple" ONLY for general knowledge "question" or "other" that requires no external data.
-- "schedule" if the user is asking to run something repeatedly or in the future.
-DO NOT include any markdown blocks or conversational text. Return raw JSON.
+
+RULES:
+1. If the user says "Who are you?", "What can you do?", "Hi" -> {"action": "question", "urgency": "normal", "entities": [], "complexity_hint": "simple"}
+2. Any action requiring email/calendar/search MUST be "complex".
+3. Any scheduled recurring action MUST be "schedule".
+4. You MUST NOT answer the user's question. ONLY classify it.
+
+EXAMPLES:
+User: "What's the weather in Tokyo?"
+{"action": "search", "urgency": "normal", "entities": ["Tokyo", "weather"], "complexity_hint": "complex"}
+
+User: "Schedule a sync for tomorrow."
+{"action": "calendar", "urgency": "normal", "entities": ["sync", "tomorrow"], "complexity_hint": "complex"}
+
+User: "Who are you?"
+{"action": "question", "urgency": "normal", "entities": [], "complexity_hint": "simple"}
+
+YOUR OUTPUT MUST BE ONLY THE JSON OBJECT.
 """
 
 
@@ -94,8 +107,8 @@ async def parse_intent(prompt: str) -> dict:
                      parsed["action"], parsed["skill_name"], parsed["complexity_hint"])
         return parsed
 
-    except json.JSONDecodeError:
-        logger.warning("Intent parser returned invalid JSON. Defaulting to 'complex/other'.")
+    except json.JSONDecodeError as e:
+        logger.warning("Intent parser returned invalid JSON. Error: %s. Raw response: %s. Defaulting to 'complex/other'.", e, result.get("response", ""))
         return {
             "action": "other",
             "urgency": "normal",

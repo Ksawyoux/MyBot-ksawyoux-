@@ -48,8 +48,9 @@ from src.shared.message_processor import MessageProcessor
 logger = get_logger(__name__)
 
 SYSTEM_PROMPT = (
-    "You are a personal AI assistant with access to email, calendar, and web search tools. "
-    "You are helpful, concise, and proactive.\n\n"
+    "You are a personal AI assistant created by Ksawyoux to be highly helpful, proactive, and concise. "
+    "You have access to email, calendar, and web search tools to complete tasks for the user. "
+    "If the user asks who you are, what you can do, or engages in conversation, answer confidently as a capable AI assistant. NEVER search the web for questions about your own identity.\n\n"
     "## Output Formatting Rules (MANDATORY):\n"
     "1. Use **bold headers** (e.g., *Header*) for distinct sections. NEVER use markdown headers like '# Header'.\n"
     "2. Use bullet points with relevant emojis (e.g., 📧 for email, 📅 for calendar) for lists.\n"
@@ -321,16 +322,27 @@ async def pending_approvals_handler(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("✅ No pending approvals.")
         return
         
+    AGENT_MAP = {
+        "create_event": "CalendarManager",
+        "update_event": "CalendarManager",
+        "delete_event": "CalendarManager",
+        "get_calendar_events": "CalendarManager",
+        "send_email": "EmailManager",
+        "read_emails": "EmailManager",
+        "search_web": "WebResearcher",
+        "read_webpage": "WebResearcher",
+    }
+
     for app in approvals:
+        agent_name = AGENT_MAP.get(app['action_type'], "SystemAgent")
         text = (
-            f"🔒 *Approval #{app['id']}*\n"
-            f"Action: `{app['action_type']}`\n"
-            f"Desc: {app['description']}\n"
-            f"Expires: {app['expires_at']}"
+            f"⚠️ [APPROVAL REQUIRED] ⚠️\n"
+            f"Agent: {agent_name}\n"
+            f"Action: {app['description']}"
         )
         msg = await update.message.reply_text(
             text, 
-            parse_mode="Markdown", 
+            parse_mode=None, 
             reply_markup=get_approval_keyboard(app["id"])
         )
         # Update db with msg id if needed
@@ -381,8 +393,8 @@ async def approval_callback_handler(update: Update, context: ContextTypes.DEFAUL
         # Update message
         original_text = query.message.text or f"Approval #{app_id}"
         await query.edit_message_text(
-            text=f"{original_text}\n\n*Status:* ✅ Approved{execution_result}",
-            parse_mode="Markdown",
+            text=f"{original_text}\n\nStatus: APPROVED{execution_result}",
+            parse_mode=None,
             reply_markup=get_resolved_keyboard("approved")
         )
         
@@ -391,8 +403,8 @@ async def approval_callback_handler(update: Update, context: ContextTypes.DEFAUL
         update_approval_status(app_id, "rejected")
         original_text = query.message.text or f"Approval #{app_id}"
         await query.edit_message_text(
-            text=f"{original_text}\n\n*Status:* ❌ Rejected",
-            parse_mode="Markdown",
+            text=f"{original_text}\n\nStatus: REJECTED",
+            parse_mode=None,
             reply_markup=get_resolved_keyboard("rejected")
         )
 

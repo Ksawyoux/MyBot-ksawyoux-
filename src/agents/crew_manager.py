@@ -201,7 +201,18 @@ async def execute_crew_task(intent: dict, prompt: str, task_id: int) -> str:
         # CrewAI kickoff is synchronous, we use asyncio.to_thread to not block the event loop
         import asyncio
         result = await asyncio.to_thread(crew.kickoff)
+        if not result:
+            raise ValueError("CrewAI returned empty response")
         return str(result)
     except Exception as exc:
         logger.error("Crew execution failed: %s", exc)
-        return f"Crew encountered an error: {str(exc)}"
+        logger.warning("Falling back to standard LLM completion due to CrewAI failure.")
+        from src.llm.gateway import complete
+        fallback_result = await complete(
+            prompt="Attempted to complete this complex task but the automated crew failed. "
+                   "Please do your best to answer this based on your own knowledge: " + prompt,
+            model_tier="capable",
+            system_prompt="You are a helpful AI assistant.",
+            priority=0
+        )
+        return fallback_result["response"]

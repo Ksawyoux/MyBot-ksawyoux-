@@ -22,12 +22,19 @@ class OutputRepository:
                 task.output_text = envelope.content.primary.text or ""
             
             # 2. Insert into output_history
+            msg_id = None
+            if platform_msg_id is not None:
+                try:
+                    msg_id = int(platform_msg_id)
+                except ValueError:
+                    pass
+                    
             history = OutputHistory(
                 task_id=int(envelope.task_id),
                 sequence_number=envelope.sequence_number,
                 output_envelope=envelope_dict,
                 rendered_for=platform,
-                telegram_msg_id=int(platform_msg_id) if platform_msg_id and platform_msg_id.isdigit() else None
+                telegram_msg_id=msg_id
             )
             db.add(history)
             
