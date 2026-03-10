@@ -1,0 +1,46 @@
+# Telegram bot
+python-telegram-bot==21.3
+
+# Database
+sqlalchemy==2.0.30
+psycopg2-binary==2.9.9
+pgvector==0.3.0
+
+# Web framework (health endpoint)
+flask==3.0.3
+
+# Environment
+python-dotenv==1.0.1
+
+# LLM / HTTP
+httpx==0.27.0
+aiohttp==3.9.5
+tenacity==8.3.0
+langchain-core==1.2.18
+langchain-openai==1.1.11
+litellm==1.44.0
+
+# Embeddings (lazy-loaded in Phase 2)
+sentence-transformers==3.0.1
+
+# Token counting
+tiktoken==0.7.0
+
+# Agent framework (lazy-loaded in Phase 6)
+crewai==0.51.0
+
+# Web scraping (Phase 4)
+beautifulsoup4==4.12.3
+lxml==5.2.2
+
+# Google APIs (Phase 4)
+google-auth==2.30.0
+google-api-python-client==2.134.0
+
+# Scheduling / cron (Phase 7)
+croniter==2.0.5
+
+# Utilities
+pydantic==2.7.4
+python-dateutil==2.9.0.post0
+pydantic-settings==2.7.1

@@ -1,0 +1,96 @@
+"""
+src/main.py — Application entry point
+Starts the Telegram bot and the Flask health server in parallel threads.
+"""
+
+import threading
+import asyncio
+import sys
+import signal
+from typing import Any
+
+from src.utils.logging import get_logger
+from src.config.settings import HEALTH_PORT
+from src.db.connection import test_connection
+from src.bot.telegram_bot import build_application
+from scripts.health_ping import run_health_server
+from src.scheduler.engine import get_scheduler
+from scripts.startup_recovery import recover_stuck_tasks
+
+logger = get_logger(__name__)
+
+
+def run_bot() -> None:
+    """Run the Telegram bot in polling mode (blocking)."""
+    app = build_application()
+    logger.info("Starting Telegram bot (polling)...")
+    app.run_polling(drop_pending_updates=True)
+
+
+def shutdown_handler(signum, frame):
+    """Handle graceful shutdown signals."""
+    logger.info("Received signal %d. Shutting down gracefully...", signum)
+    
+    # 1. Stop APScheduler
+    try:
+        scheduler = get_scheduler()
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
+            logger.info("Scheduler shutdown complete.")
+    except Exception as e:
+        logger.error("Error shutting down scheduler: %s", e)
+
+    # 2. Stop LLM Queue (if applicable)
+    try:
+        from src.llm.request_queue import get_request_queue
+        get_request_queue().stop()
+        logger.info("LLM Request Queue shutdown complete.")
+    except Exception as e:
+        logger.error("Error shutting down LLM Queue: %s", e)
+
+    logger.info("Exiting.")
+    sys.exit(0)
+
+
+def main() -> None:
+    logger.info("=" * 50)
+    logger.info("AI Agent System — Starting up")
+    logger.info("=" * 50)
+
+    # Register signal handlers
+    signal.signal(signal.SIGINT, shutdown_handler)
+    signal.signal(signal.SIGTERM, shutdown_handler)
+
+    try:
+        # Verify DB is reachable before starting
+        if not test_connection():
+            logger.critical("Database not reachable. Aborting startup.")
+            sys.exit(1)
+
+        # Run recovery cleanups
+        recover_stuck_tasks()
+
+        # Health server runs in a daemon thread
+        health_thread = threading.Thread(
+            target=run_health_server,
+            args=(HEALTH_PORT,),
+            daemon=True,
+            name="health-server",
+        )
+        health_thread.start()
+        logger.info("Health server thread started on port %d", HEALTH_PORT)
+
+
+        # Start the APScheduler engine
+        get_scheduler()
+
+        # Telegram bot runs on the main thread
+        run_bot()
+
+    except Exception as exc:
+        logger.critical("Fatal error during startup: %s", exc, exc_info=True)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
