@@ -69,6 +69,7 @@ async def call_with_fallback(
     max_tokens: int,
     response_format: Optional[dict] = None,
     metadata: Optional[dict] = None,
+    tools: Optional[list] = None,
 ) -> tuple[str, str, int]:
     """
     Try primary model; fall back to fallback_model on 429/5xx.
@@ -88,6 +89,7 @@ async def call_with_fallback(
             
             # Use the new cached client for OpenAI models
             if "gpt-" in model or "o1-" in model:
+                system_prompt = next((m["content"] for m in messages if m["role"] == "system"), None)
                 text, tokens = await chat_openai(
                     user_message=user_message,
                     tier=meta.get("tier", "agentic"),
@@ -98,6 +100,8 @@ async def call_with_fallback(
                     model=model,
                     max_tokens=max_tokens,
                     response_format=response_format,
+                    tools=tools,
+                    system_prompt=system_prompt,
                 )
             else:
                 # Fallback to standard HTTPX call for non-OpenAI models (via OpenRouter or others)

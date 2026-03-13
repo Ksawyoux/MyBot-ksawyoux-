@@ -34,13 +34,17 @@ async def crew_pipeline(user_msg: str, context: dict):
 async def agentic_respond(user_msg: str, context: dict, tier: str = "capable"):
     """Reasoning-heavy single agent response."""
     # Similar to fast_respond but with a higher tier model.
+    from src.mcp.client import get_mcp_client
+    tools = get_mcp_client().list_tools()
+    
     result = await complete(
         prompt=user_msg,
         model_tier=tier,
         system_prompt=context.get("system_prompt", "You are a helpful assistant."),
         conversation_history=context.get("history", []),
         priority=0,
-        metadata=context.get("metadata", {})
+        metadata=context.get("metadata", {}),
+        tools=tools
     )
     return result["response"]
 
@@ -96,6 +100,8 @@ def register_core_handlers():
     register_handler("crew_pipeline", crew_pipeline)
     register_handler("agentic_respond", agentic_respond)
     register_handler("handle_scheduling", handle_scheduling)
+    from src.router.web_handlers import handle_web_browse
+    register_handler("handle_web_browse", handle_web_browse)
     
     # Register MCP-based Web Tools
     from src.tools.web_tools import register_web_tools

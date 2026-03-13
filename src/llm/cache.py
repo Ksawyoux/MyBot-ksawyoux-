@@ -58,6 +58,10 @@ def store_cached_response(messages: list[dict], model: str, response: str, token
             preview = msg.get("content", "")[:120].replace("\n", " ")
             break
             
+    if not response:
+        logger.warning("Attempted to store empty response for hash %s. Skipping.", key[:8])
+        return
+
     try:
         with get_db() as db:
             # Upsert using query and update/insert

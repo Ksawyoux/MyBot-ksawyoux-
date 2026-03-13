@@ -13,7 +13,7 @@ async def enrich_prompt_with_context(prompt: str) -> str:
     Search for long-term facts relevant to the user's prompt
     and prepend them as context.
     """
-    relevant_memories = await search_memory(prompt, limit=3, threshold=0.6)
+    relevant_memories = await search_memory(prompt, limit=5, threshold=0.5)
 
     if not relevant_memories:
         return prompt

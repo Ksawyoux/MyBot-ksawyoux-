@@ -53,18 +53,18 @@ def test_fallback_reminder():
 
 def test_fallback_email():
     res = _fallback_classify("check my email please")
-    assert res["tier"] == "agentic"
-    assert res["action"] == "email"
+    assert res["tier"] == "fast"
+    assert res["action"] == "other"
 
 def test_fallback_calendar():
     res = _fallback_classify("whats on my calendar today")
-    assert res["tier"] == "agentic"
-    assert res["action"] == "calendar"
+    assert res["tier"] == "fast"
+    assert res["action"] == "other"
 
 def test_fallback_research():
     res = _fallback_classify("research the top 10 richest people")
     assert res["tier"] == "agentic"
-    assert res["action"] == "research"
+    assert res["action"] == "search"
 
 def test_fallback_search():
     res = _fallback_classify("search for flights to NYC")
@@ -73,8 +73,8 @@ def test_fallback_search():
     
 def test_fallback_plan():
     res = _fallback_classify("plan a trip to Paris")
-    assert res["tier"] == "agentic"
-    assert res["action"] == "plan"
+    assert res["tier"] == "fast"
+    assert res["action"] == "other"
 
 def test_fallback_other():
     res = _fallback_classify("what is the meaning of life")
@@ -92,9 +92,9 @@ async def test_parse_intent_success(mock_complete, mock_get_sys):
     
     intent = await parse_intent("research quantum computing")
     assert intent["tier"] == "agentic"
-    assert intent["action"] == "research"
+    assert intent["action"] == "search"
     assert intent["requires_tools"] is True
-    assert intent["complexity"] == "high"
+    assert intent["complexity"] == "low"
     assert intent["complexity_hint"] == "complex"
 
 @pytest.mark.asyncio
@@ -106,11 +106,11 @@ async def test_parse_intent_llm_fails_triggering_fallback(mock_complete, mock_ge
         "response": '```json\\nthis is not valid json\\n```'
     }
     
-    # Even if LLM fails, we expect the fallback rule to match "email"
+    # Even if LLM fails, we expect the fallback rule to match "other" for short msg
     intent = await parse_intent("check my email right now")
-    assert intent["tier"] == "agentic"
-    assert intent["action"] == "email"
-    assert intent["thought"] == "Fallback pattern match"
+    assert intent["tier"] == "fast"
+    assert intent["action"] == "other"
+    assert intent["thought"] == "Fallback: medium message, treating as general query"
 
 @pytest.mark.asyncio
 @patch('src.router.intent_parser.get_dynamic_system_prompt', return_value="dummy_sys_prompt")
@@ -121,4 +121,4 @@ async def test_parse_intent_llm_throws_exception_triggering_fallback(mock_comple
     intent = await parse_intent("yo what is up")
     assert intent["tier"] == "fast"
     assert intent["action"] == "social"
-    assert intent["thought"] == "Fallback pattern match"
+    assert intent["thought"] == "Social greeting"

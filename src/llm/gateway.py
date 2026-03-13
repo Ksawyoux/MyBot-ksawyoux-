@@ -24,6 +24,7 @@ async def complete(
     priority: int = PRIORITY_BACKGROUND,
     response_format: Optional[dict] = None,
     metadata: Optional[dict] = None,
+    tools: Optional[list] = None,
 ) -> dict:
     """
     Single entry point for all LLM calls.
@@ -63,6 +64,7 @@ async def complete(
             max_tokens=max_tokens,
             response_format=response_format,
             metadata=metadata,
+            tools=tools,
         )
         latency_ms = int((time.monotonic() - start) * 1000)
 

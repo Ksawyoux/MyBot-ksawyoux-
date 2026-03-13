@@ -26,17 +26,20 @@ async def chat_openai(
     model: str = "gpt-4o",
     max_tokens: int = 4000,
     response_format: Optional[dict] = None,
+    tools: Optional[list] = None,
+    system_prompt: Optional[str] = None,
 ):
     """
     OpenAI auto-caches matching prefixes ≥1024 tokens.
     Static blocks FIRST = stable prefix = cache hit.
     """
-    system_prompt = build_system_prompt(
-        user_facts=user_facts,
-        connected_servers=servers,
-        tier=tier,
-        active_task=active_task,
-    )
+    if not system_prompt:
+        system_prompt = build_system_prompt(
+            user_facts=user_facts,
+            connected_servers=servers,
+            tier=tier,
+            active_task=active_task,
+        )
 
     messages = [{"role": "system", "content": system_prompt}]
     if history:
@@ -50,6 +53,8 @@ async def chat_openai(
     }
     if response_format:
         payload["response_format"] = response_format
+    if tools:
+        payload["tools"] = tools
 
     response = await client.chat.completions.create(**payload)
 

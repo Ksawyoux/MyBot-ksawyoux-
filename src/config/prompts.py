@@ -143,7 +143,7 @@ def build_dynamic_context(
     active_task: dict | None = None,
 ) -> str:
     now = current_datetime or datetime.now().strftime("%a %b %d %Y %H:%M")
-    tools = _build_tool_string(tuple(connected_servers) if connected_servers else ())
+    tools = _build_tool_string(tuple(connected_servers) if connected_servers else ("web-search", "web-fetch"))
 
     parts = [f"<CTX>\nT: {now}\nTools: {tools}"]
 
@@ -286,6 +286,16 @@ When activated correctly:
 6. State what you COULDN'T find
 7. Recommend specific action based on findings
 
+<SEARCH_SYNTHESIS_PROTOCOL>
+When synthesizing search results for the user:
+• *Synthesize, don't list*: Users want answers, not 5 links.
+• *Include source URLs*: Provide credibility and links for follow-up.
+• *State confidence level*: Mention if findings are from multiple sources or just one.
+• *Note freshness*: Mention "As of [Current Date]" for timely information.
+• *Flag contradictions*: If Source A says X and Source B says Y, state that.
+• *Handle gaps*: If search results are insufficient, say so instead of hallucinating.
+</SEARCH_SYNTHESIS_PROTOCOL>
+
 When activated incorrectly (internal data request):
 - Return: {"error": "routing_mismatch", "reason": "This is an internal data query, not external research", "suggested_handler": "internal_query"}"""
 
@@ -318,48 +328,44 @@ Parallelize independent steps. Track token budget. Preserve context across hando
 #  UTILITY PROMPTS (Small, loaded on demand — not cached)
 # ═════════════════════════════════════════════════════════════════════════════
 
-INTENT_SYSTEM_PROMPT = """Classify user intent. You must respond with a JSON object.
+INTENT_SYSTEM_PROMPT = """You are an intent CLASSIFIER. You do NOT execute tasks.
+You do NOT access URLs. You do NOT search the web.
+You ONLY analyze the user's message and output a JSON classification.
 
-<CRITICAL_RULE>
-INTERNAL queries (scheduled tasks, memory, stored data, user history)
-are NEVER "agentic" or "research". They are "fast" tier internal lookups.
-Only use "agentic" when the user needs EXTERNAL data or multi-step execution.
-</CRITICAL_RULE>
+Even if the user says "go to [url]" or "search for X", your job is to
+LABEL the intent, not DO it. Another system will handle execution.
 
-Tier definitions:
-- *fast*: greetings, social, simple questions, INTERNAL DATA QUERIES
-  (scheduled tasks, memory recall, stored preferences, conversation history)
-- *agentic*: requires EXTERNAL tools (email, calendar, web search, github, files),
-  multi-step execution, research, analysis of NEW information
-- *scheduled*: creating/modifying future or recurring tasks
+<RULES>
+- Message contains a URL or website name → action: "web_browse"
+- Message asks to search/find/look up → action: "search"
+- Greetings/social → action: "social", tier: "fast"
+- Internal data (my tasks, my memory) → action: "internal_query", tier: "fast"
+- NEVER refuse. NEVER say "I cannot". ALWAYS output valid JSON.
+</RULES>
 
-Action routing:
-- "show my tasks/reminders/schedule" → fast / internal_query (NO tools needed)
-- "what do you know about me" → fast / internal_query
-- "check my email" → agentic / email (needs external tool)
-- "research X" → agentic / search (needs web search)
-- "remind me every Monday" → scheduled / reminder
+Output ONLY valid JSON. Nothing else.
 
-{"thought":"...","tier":"fast|agentic|scheduled","action":"social|internal_query|email|calendar|search|file|code|reminder|research|plan|clarify|other","requires_tools":bool,"complexity":"low|medium|high"}
+{"thought":"...","tier":"fast|agentic|scheduled","action":"social|internal_query|email|calendar|search|web_browse|file|code|reminder|research|plan|clarify|other","requires_tools":bool,"complexity":"low|medium|high"}
 
 EXAMPLES:
-User: "Hello, show me my scheduled tasks"
-{"thought":"Greeting + request for internal scheduled data. No external tools needed.","tier":"fast","action":"internal_query","requires_tools":false,"complexity":"low"}
 
-User: "What tasks do I have"
-{"thought":"Internal data lookup from scheduler.","tier":"fast","action":"internal_query","requires_tools":false,"complexity":"low"}
+User: "Go to example.com and tell me what you see"
+{"thought":"User wants to browse a URL and get content.","tier":"agentic","action":"web_browse","requires_tools":true,"complexity":"low"}
 
-User: "What's on my calendar today"
-{"thought":"Needs Google Calendar API - external tool.","tier":"agentic","action":"calendar","requires_tools":true,"complexity":"low"}
+User: "Check out https://github.com/something"
+{"thought":"URL provided, user wants page content.","tier":"agentic","action":"web_browse","requires_tools":true,"complexity":"low"}
 
-User: "Research the best project management tools and compare them"
-{"thought":"External research + analysis. Multi-step.","tier":"agentic","action":"research","requires_tools":true,"complexity":"high"}
+User: "Search for Python jobs in Berlin"
+{"thought":"Web search request.","tier":"agentic","action":"search","requires_tools":true,"complexity":"low"}
 
-User: "Remind me to call Ahmed every Friday at 5pm"
-{"thought":"Creating a recurring scheduled task.","tier":"scheduled","action":"reminder","requires_tools":false,"complexity":"low"}
+User: "What's the latest news about AI"
+{"thought":"News search request.","tier":"agentic","action":"search","requires_tools":true,"complexity":"low"}
 
 User: "yo"
-{"thought":"Social greeting.","tier":"fast","action":"social","requires_tools":false,"complexity":"low"}"""
+{"thought":"Social greeting.","tier":"fast","action":"social","requires_tools":false,"complexity":"low"}
+
+User: "show my tasks"
+{"thought":"Internal data query.","tier":"fast","action":"internal_query","requires_tools":false,"complexity":"low"}"""
 
 
 EXTRACTOR_SYSTEM_PROMPT = """Extract durable user facts. You must respond with a JSON object.
@@ -414,5 +420,8 @@ def _build_tool_string(servers: tuple) -> str:
         "brave-search":    "🔍search(web,news)",
         "github":          "💻github(repos,issues,PRs)",
         "filesystem":      "📁files(read,write,search)",
+        "web-browsing":    "🌐web(browse,click,fill,scrape)",
+        "web-search":      "🔍search(web,news,instant)",
+        "web-fetch":       "🌐read_url(fetch any page)",
     }
     return ", ".join(SHORT.get(s, s) for s in servers)

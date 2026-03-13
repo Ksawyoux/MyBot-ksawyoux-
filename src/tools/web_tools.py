@@ -1,91 +1,19 @@
-"""
-src/tools/web_tools.py — MCP Tool definitions for web browsing.
-"""
-
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from src.mcp.client import get_mcp_client
-from src.utils.logging import get_logger
-from src.skills.web_interaction.strategy import select_browsing_strategy, get_fallback_strategy
-from src.skills.web_interaction.scraper import fetch_page
-from src.skills.web_interaction.browser import browse_url_dynamic, perform_action
-from src.skills.web_interaction.cache import get_from_cache, set_in_cache
-from src.skills.web_interaction.safety import requires_approval, is_url_safe
-
-import os
-import httpx
-from bs4 import BeautifulSoup
-
-logger = get_logger(__name__)
+from src.tools.web_search import search_tool, format_results_for_llm
+from src.tools.web_fetch import fetch_url as fetch_url_internal
+from src.tools.web_cache import web_cache
 
 async def browse_url(url: str) -> Dict[str, Any]:
-    """
-    Fetches content from a URL using the best available strategy.
-    """
-    # 1. Check Cache
-    cached = get_from_cache(url)
-    if cached:
-        return cached
+    """Fetches content from a URL using web_fetch."""
+    return await fetch_url_internal(url)
 
-    # 2. Select Strategy
-    strategy = select_browsing_strategy(url)
-    
-    # 3. Execute
-    result = None
-    if strategy == "scraper":
-        result = await fetch_page(url)
-        if "error" in result:
-            fallback = get_fallback_strategy("scraper")
-            if fallback == "browser":
-                result = await browse_url_dynamic(url)
-    else:
-        result = await browse_url_dynamic(url)
-
-    # 4. Cache and Return
-    if "error" not in result:
-        set_in_cache(url, result)
-    
-    return result
-
-async def click_element(selector: str) -> Dict[str, Any]:
-    """Clicks an element on the current page."""
-    return await perform_action("click", {"selector": selector})
-
-async def fill_form(selector: str, value: str) -> Dict[str, Any]:
-    """Fills a form field on the current page."""
-    return await perform_action("fill", {"selector": selector, "value": value})
-
-async def web_search(query: str) -> Dict[str, Any]:
-    """
-    Performs a web search using a public search engine (DuckDuckGo fallback).
-    """
-    logger.info("Performing web search for: %s", query)
-    
-    # Check if Brave API Key exists (Phase 5 improvement)
-    brave_key = os.getenv("BRAVE_API_KEY")
-    if brave_key:
-        # Implementation for Brave API would go here
-        pass
-
-    # Fallback: DuckDuckGo scraping (or using a public search API)
-    # Note: Scraping search engines can be brittle, but works for a direct "no-setup" experience.
-    search_url = f"https://duckduckgo.com/html/?q={query}"
-    result = await fetch_page(search_url)
-    
-    if "error" in result:
-        return result
-
-    soup = BeautifulSoup(result["html"], "html.parser")
-    links = []
-    for result in soup.find_all("a", class_="result__a")[:5]:
-        links.append({
-            "title": result.get_text(),
-            "url": result["href"]
-        })
-        
+async def web_search_tool(query: str) -> Dict[str, Any]:
+    """Performs a web search using web_search."""
+    results = await search_tool.web_search(query)
     return {
-        "query": query,
-        "results": links,
-        "source": "DuckDuckGo (Free Fallback)"
+        "results": results,
+        "formatted": format_results_for_llm(results)
     }
 
 def register_web_tools():
@@ -93,54 +21,72 @@ def register_web_tools():
     client = get_mcp_client()
     
     client.register_tool(
-        name="browse_url",
+        name="web_fetch",
         func=browse_url,
-        description="Fetch content from a URL. Automatically chooses between static scraping and dynamic browsing.",
+        description="Fetch content from a URL and extract clean text.",
         parameters={
             "type": "object",
             "properties": {
-                "url": {"type": "string", "description": "The URL to browse"}
+                "url": {"type": "string", "description": "The URL to fetch"}
             },
             "required": ["url"]
         }
     )
 
     client.register_tool(
-        name="click_element",
-        func=click_element,
-        description="Click an element (link, button) on the currently open page using a CSS selector or ID.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "selector": {"type": "string", "description": "CSS selector or ID of the element"}
-            },
-            "required": ["selector"]
-        }
-    )
-
-    client.register_tool(
-        name="fill_form",
-        func=fill_form,
-        description="Fill a form field on the currently open page.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "selector": {"type": "string", "description": "CSS selector or ID of the input field"},
-                "value": {"type": "string", "description": "The value to fill"}
-            },
-            "required": ["selector", "value"]
-        }
-    )
-
-    client.register_tool(
         name="web_search",
-        func=web_search,
-        description="Search the web for a query and return top results with titles and URLs.",
+        func=web_search_tool,
+        description="Search the web for a query using DuckDuckGo.",
         parameters={
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "The search query"}
             },
             "required": ["query"]
+        }
+    )
+
+    from src.tools.web_interact import get_interactive_elements, click_element, type_text
+
+    client.register_tool(
+        name="web_list_elements",
+        func=get_interactive_elements,
+        description="List interactive elements (buttons, links) on a page to decide what to click.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "The URL to analyze"}
+            },
+            "required": ["url"]
+        }
+    )
+
+    client.register_tool(
+        name="web_click",
+        func=click_element,
+        description="Click an element on a web page using a selector.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "The current page URL"},
+                "selector": {"type": "string", "description": "CSS selector to click"}
+            },
+            "required": ["url", "selector"]
+        }
+    )
+
+    client.register_tool(
+        name="web_type",
+        func=type_text,
+        description="Type text into an input field on a web page.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "The current page URL"},
+                "selector": {"type": "string", "description": "CSS selector for the input"},
+                "text": {"type": "string", "description": "The text to type"},
+                "press_enter": {"type": "boolean", "description": "Whether to press Enter after typing", "default": True}
+            },
+            "required": ["url", "selector", "text"]
         }
     )

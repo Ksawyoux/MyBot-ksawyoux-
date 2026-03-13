@@ -12,12 +12,12 @@ def create_web_agent(llm) -> Agent:
     Creates an autonomous web browsing agent that can navigate, observe, and interact.
     """
     return Agent(
-        role="Web Browsing Specialist",
-        goal="Navigate websites, extract information, and interact with web elements to solve complex tasks.",
+        role="Web Systems Automation Specialist",
+        goal="Navigate websites, interact with UI elements (clicks, types), and extract structured information to solve complex user requests.",
         backstory=(
-            "You are an expert at navigating the modern web. You understand how to use browsers, "
-            "identify key information on JS-heavy sites, and interact with forms and buttons. "
-            "You are persistent and can handle cookie banners, popups, and complex layouts."
+            "You are a master of web systems automation. You don't just read pages; you interact with them. "
+            "You know how to use 'web_list_elements' to see what's on a page, 'web_click' to navigate or submit forms, "
+            "and 'web_type' to provide input. You are persistent, methodical, and can handle dynamic modern web apps (SPAs)."
         ),
         llm=llm,
         verbose=True,
@@ -31,14 +31,14 @@ def create_web_task(agent: Agent, prompt: str) -> Task:
     """
     return Task(
         description=(
-            f"Solve the following web-related task: {prompt}\n\n"
-            "Steps to follow:\n"
-            "1. Analyze the requirement and identify the target URL(s).\n"
-            "2. Use the 'browse_url' tool to fetch the initial content.\n"
-            "3. If the page is interactive or dynamic, use 'click_element' or 'fill_form' as needed.\n"
-            "4. Extract the requested information or perform the requested action.\n"
-            "5. Synthesize your findings and provide a final answer."
+            f"Fulfill the following user request by interacting with the web: {prompt}\n\n"
+            "Execution Strategy:\n"
+            "1. Start by navigating to the relevant URL using 'browse_url'.\n"
+            "2. If entry points aren't obvious, use 'web_list_elements' to identify buttons or links.\n"
+            "3. Use 'web_click' to navigate deeper or 'web_type' if searching/inputting data is required.\n"
+            "4. Always confirm the state of the page after an interaction by checking the output 'content_preview'.\n"
+            "5. Repeat until you have reached the goal or extracted all necessary information."
         ),
-        expected_output="A detailed summary of findings or confirmation of actions performed on the web.",
+        expected_output="A comprehensive report on the actions performed and the final result or information retrieved.",
         agent=agent
     )

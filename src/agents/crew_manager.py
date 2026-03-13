@@ -214,7 +214,7 @@ async def execute_crew_task(intent: dict, prompt: str, task_id: int) -> str:
             raise ValueError("CrewAI returned empty response")
         return str(result)
     except Exception as exc:
-        logger.error("Crew execution failed: %s", exc)
+        logger.error("Crew execution failed: %s", exc, exc_info=True)
         logger.warning("Falling back to standard LLM completion due to CrewAI failure.")
         from src.llm.gateway import complete
         fallback_result = await complete(

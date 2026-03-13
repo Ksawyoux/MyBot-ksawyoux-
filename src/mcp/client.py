@@ -49,9 +49,10 @@ class MCPClient:
         for tool in self._tools.keys():
             if "email" in tool: servers.add("google-tools")
             elif "calendar" in tool: servers.add("google-calendar")
-            elif "search" in tool: servers.add("brave-search")
+            elif "search" in tool: servers.add("web-search")
             elif "github" in tool: servers.add("github")
             elif "file" in tool: servers.add("filesystem")
+            elif "fetch" in tool or "browse" in tool or "click" in tool or "fill" in tool: servers.add("web-fetch")
         return list(servers)
 
     def get_tool_meta(self, name: str) -> Optional[dict]:

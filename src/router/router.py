@@ -40,6 +40,14 @@ async def route_message(user_msg: str, intent: dict, context: dict) -> Optional[
         return None
     
     # ── AGENTIC TIER ───────────────────────────────────────────
+    if action == "search":
+        # Search almost always needs LLM synthesis, so we return None
+        # but we could pre-fetch and inject into context here.
+        return None
+    
+    if action == "web_browse":
+        return None
+        
     # All agentic tiers (low/med/high complexity) return None to hit LLM/CrewAI
     return None
 

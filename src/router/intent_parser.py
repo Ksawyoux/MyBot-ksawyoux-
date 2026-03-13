@@ -52,6 +52,81 @@ def _clean_json_response(text: str) -> str:
     text = re.sub(r',\s*\]', ']', text)
     return text.strip()
 
+def classify_fast(user_msg: str) -> dict | None:
+    """Pattern-based classification. No LLM needed."""
+    msg = user_msg.lower().strip()
+    
+    # ── URL DETECTION (highest priority) ──────────────────
+    url_patterns = [
+        r'https?://[^\s]+',                    # Full URL
+        r'[a-zA-Z0-9-]+\.[a-zA-Z]{2,}',       # domain.com style
+        r'[a-zA-Z0-9-]+\.vercel\.app',         # Vercel apps
+        r'[a-zA-Z0-9-]+\.netlify\.app',        # Netlify apps
+        r'[a-zA-Z0-9-]+\.github\.io',          # GitHub pages
+    ]
+    
+    has_url = any(re.search(p, user_msg) for p in url_patterns)
+    
+    # Check for browse intent words
+    browse_words = ["go to", "check out", "visit", "open", "browse",
+                    "look at", "read", "what does", "tell me about", "access", "blog"]
+    has_browse_intent = any(w in msg for w in browse_words) or "blog" in msg
+    
+    if has_url or has_browse_intent:
+        # If it's just "access my blogs" without a URL, 
+        # the handler should attempt to find it in context.
+        return {
+            "thought": "URL or browse/blog intent detected",
+            "tier": "agentic",
+            "action": "web_browse",
+            "requires_tools": True,
+            "complexity": "low",
+        }
+    
+    # ── SEARCH DETECTION ──────────────────────────────────
+    search_starters = [
+        "search for", "search about", "look up", "find me",
+        "google", "what is the latest", "latest news",
+        "find information", "research",
+    ]
+    if any(msg.startswith(s) or s in msg for s in search_starters):
+        return {
+            "thought": "Search intent detected",
+            "tier": "agentic",
+            "action": "search",
+            "requires_tools": True,
+            "complexity": "low",
+        }
+    
+    # ── SOCIAL (existing) ─────────────────────────────────
+    social_words = {"hi","hello","hey","yo","sup","hy","heyy",
+                    "wbu","hru","gm","gn","thx","thanks","ok",
+                    "cool","lol","bye"}
+    if msg in social_words or len(msg.split()) <= 2 or "yo what is up" in msg:
+        return {
+            "thought": "Social greeting",
+            "tier": "fast",
+            "action": "social",
+            "requires_tools": False,
+            "complexity": "low",
+        }
+    
+    # ── INTERNAL QUERY (existing) ─────────────────────────
+    internal_kw = ["my tasks", "my reminders", "scheduled",
+                   "my memory", "know about me", "my jobs", "remind"]
+    if any(kw in msg for kw in internal_kw):
+        tier = "scheduled" if "remind" in msg else "fast"
+        return {
+            "thought": "Internal data request" if tier == "fast" else "Scheduled task request",
+            "tier": tier,
+            "action": "internal_query" if tier == "fast" else "reminder",
+            "requires_tools": False,
+            "complexity": "low",
+        }
+    
+    return None  # Needs LLM classification
+
+
 def _validate_intent(intent: dict, user_msg: str) -> dict:
     """Validate and fix intent fields."""
     required = {"tier", "action", "requires_tools"}
@@ -94,67 +169,92 @@ def _validate_intent(intent: dict, user_msg: str) -> dict:
     return fixed
 
 def _fallback_classify(user_msg: str) -> dict:
-    """Pattern-based fallback classifier if everything fails."""
-    user_msg_lower = user_msg.lower()
+    """
+    Rule-based fallback when LLM classifier fails.
+    NEVER default to complex. Analyze the message.
+    """
+    msg = user_msg.lower().strip()
     
-    # Social
-    if any(w in user_msg_lower for w in ["yo", "sup", "hello", "hi", "hey", "how's it going"]):
-        action = "social"
-        tier = "fast"
-    # Internal query
-    elif any(phrase in user_msg_lower for phrase in ["my tasks", "my scheduled tasks", "know about me", "my reminders"]):
-        action = "internal_query"
-        tier = "fast"
-    # Tools/Search/Agentic
-    elif "remind me" in user_msg_lower or "set a reminder" in user_msg_lower:
-        action = "reminder"
-        tier = "scheduled"
-    elif "email" in user_msg_lower:
-        action = "email"
-        tier = "agentic"
-    elif "calendar" in user_msg_lower:
-        action = "calendar"
-        tier = "agentic"
-    elif "search" in user_msg_lower or "research" in user_msg_lower:
-        action = "research" if "research" in user_msg_lower else "search"
-        tier = "agentic"
-    elif "plan" in user_msg_lower:
-        action = "plan"
-        tier = "agentic"
-    elif "http" in user_msg_lower or "www." in user_msg_lower or "browse" in user_msg_lower:
-        action = "web_browse"
-        tier = "agentic"
-    else:
-        action = "other"
-        tier = "fast"  # Start with fast to be cheaper as fallback
-
+    # Try pattern matching first
+    pattern_result = classify_fast(user_msg)
+    if pattern_result:
+        pattern_result["thought"] = "Fallback: pattern match after LLM failure"
+        # Ensure semantic consistency with _validate_intent's output
+        pattern_result["complexity_hint"] = "simple" if pattern_result["tier"] == "fast" else "complex"
+        pattern_result["urgency"] = "normal"
+        pattern_result["entities"] = []
+        pattern_result["skill_name"] = ""
+        return pattern_result
+    
+    # Length-based heuristic
+    word_count = len(msg.split())
+    
+    if word_count <= 3:
+        return {
+            "thought": "Fallback: short message, likely social or simple",
+            "tier": "fast",
+            "action": "social",
+            "requires_tools": False,
+            "complexity": "low",
+            "complexity_hint": "simple",
+            "urgency": "normal",
+            "entities": [],
+            "skill_name": ""
+        }
+    
+    if word_count <= 10:
+        return {
+            "thought": "Fallback: medium message, treating as general query",
+            "tier": "fast",
+            "action": "other",
+            "requires_tools": False,
+            "complexity": "low",
+            "complexity_hint": "simple",
+            "urgency": "normal",
+            "entities": [],
+            "skill_name": ""
+        }
+    
+    # Longer messages are more likely to need agentic handling
     return {
-        "tier": tier,
-        "action": action,
-        "requires_tools": tier == "agentic",
-        "complexity": "low" if tier in ("fast", "scheduled") else "medium",
-        "complexity_hint": "simple" if tier == "fast" else "complex",
+        "thought": "Fallback: longer message, treating as agentic",
+        "tier": "agentic",
+        "action": "other",
+        "requires_tools": False,
+        "complexity": "medium",
+        "complexity_hint": "complex",
         "urgency": "normal",
         "entities": [],
-        "skill_name": "",
-        "thought": "Fallback pattern match"
+        "skill_name": ""
     }
 
 
 async def parse_intent(prompt: str) -> dict:
     """
     Call the LLM (lightweight tier) to parse user intent.
-    Returns a dict with action, urgency, entities, tier, and requires_tools.
+    Checks fast patterns first to save tokens.
     """
     from src.llm.gateway import complete
 
-    logger.info("🔍 CLASSIFYING: %s", prompt)
+    # 1. Fast Pattern Path
+    fast_result = classify_fast(prompt)
+    if fast_result:
+        logger.info("✅ PATTERN MATCH: %s (%s/%s)", prompt, fast_result['tier'], fast_result['action'])
+        # Add required defaults for downstream systems
+        fast_result.setdefault("complexity_hint", "simple" if fast_result["tier"] == "fast" else "complex")
+        fast_result.setdefault("urgency", "normal")
+        fast_result.setdefault("entities", [])
+        fast_result.setdefault("skill_name", "")
+        return fast_result
 
+    logger.info("🔍 CLASSIFYING: %s", prompt)
+    sys_prompt = get_dynamic_system_prompt()
+    
     try:
         result = await complete(
             prompt=prompt,
             model_tier="lightweight",
-            system_prompt=get_dynamic_system_prompt(),
+            system_prompt=sys_prompt,
             use_cache=True,
             response_format={"type": "json_object"}
         )

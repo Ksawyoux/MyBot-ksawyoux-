@@ -30,6 +30,7 @@ ACTION_HANDLERS = {
     
     # ── COMPLEX (Multi-agent) ──────────────────────────────
     "plan":           "crew_pipeline",
+    "web_browse":     "handle_web_browse",
     
     # ── FALLBACK ───────────────────────────────────────────
     "other":          "agentic_respond",
