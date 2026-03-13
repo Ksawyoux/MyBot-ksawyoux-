@@ -23,14 +23,11 @@ async def extract_and_store_facts(session_id: str, messages: list[dict]) -> int:
         return 0
 
     conv_text = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in messages)
-
     try:
         # Prompt needs a tiny tweak to return an object because JSON mode often requires a root object
-        system_prompt = EXTRACTOR_SYSTEM_PROMPT.replace(
-            "Return ONLY a JSON list of objects", 
-            "Return ONLY a JSON object with a 'facts' key containing a list of objects"
-        )
-        
+        # Update: v2 prompts use a different anchor
+        system_prompt = EXTRACTOR_SYSTEM_PROMPT
+
         result = await complete(
             prompt=conv_text,
             model_tier="system",

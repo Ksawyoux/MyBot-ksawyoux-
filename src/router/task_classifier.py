@@ -23,12 +23,12 @@ async def classify_task(prompt: str) -> dict:
     # Determine type
     task_type = "complex"
     action = intent.get("action", "").lower()
-    complexity_hint = intent.get("complexity_hint", "").lower()
+    tier = intent.get("tier", "agentic").lower()
 
-    if action == "schedule":
+    if action == "schedule" or tier == "scheduled":
         task_type = "scheduled"
-    elif complexity_hint == "simple":
-        # Unless it specifically asked for a complex tool, trust the simple hint
+    elif tier == "fast":
+        # Unless it specifically asked for a complex tool, trust the fast tier
         if action not in ("email", "calendar", "search", "skill"):
             task_type = "simple"
 

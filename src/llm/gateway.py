@@ -23,6 +23,7 @@ async def complete(
     use_cache: bool = True,
     priority: int = PRIORITY_BACKGROUND,
     response_format: Optional[dict] = None,
+    metadata: Optional[dict] = None,
 ) -> dict:
     """
     Single entry point for all LLM calls.
@@ -61,6 +62,7 @@ async def complete(
             fallback_model=fallback_model,
             max_tokens=max_tokens,
             response_format=response_format,
+            metadata=metadata,
         )
         latency_ms = int((time.monotonic() - start) * 1000)
 

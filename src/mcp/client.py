@@ -41,6 +41,19 @@ class MCPClient:
             })
         return output
 
+    def get_connected_servers(self) -> list[str]:
+        """In Phase 4, servers are embedded. We infer names from register calls."""
+        # Simple heuristic: scrape, email, calendar, brave-search, github, filesystem
+        # In a real system, we'd track this during registration.
+        servers = set()
+        for tool in self._tools.keys():
+            if "email" in tool: servers.add("google-tools")
+            elif "calendar" in tool: servers.add("google-calendar")
+            elif "search" in tool: servers.add("brave-search")
+            elif "github" in tool: servers.add("github")
+            elif "file" in tool: servers.add("filesystem")
+        return list(servers)
+
     def get_tool_meta(self, name: str) -> Optional[dict]:
         return self._tools.get(name)
 

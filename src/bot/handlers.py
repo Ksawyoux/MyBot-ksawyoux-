@@ -49,7 +49,7 @@ from src.config.prompts import build_system_prompt
 logger = get_logger(__name__)
 
 # Initialize shared processor
-processor = MessageProcessor(build_system_prompt())
+processor = MessageProcessor()
 
 
 def is_admin(update: Update) -> bool:

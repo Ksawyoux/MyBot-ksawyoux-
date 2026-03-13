@@ -16,9 +16,9 @@
 
 ## 🌟 Overview
 
-Astra AI is an intelligent, autonomous agent designed to run as your personal Telegram bot. More than just a chatbot, it is built with an advanced multi-agent orchestrator, long-term memory extraction, scheduled cron-job execution, and an explicit human-in-the-loop approval system.
+Ksawyoux AI is an intelligent, autonomous agent designed to run as your personal Telegram bot. Built with an advanced multi-agent orchestrator, it features long-term memory extraction, Model Context Protocol (MCP) integration for extensible tool support, and an explicit human-in-the-loop approval system.
 
-Whether it's answering quick questions, managing your calendar, reading your emails, or performing deep web research, Astra AI offloads cognitive tasks securely and robustly.
+Whether it's answering quick questions, managing your calendar, or performing deep web research, Astra AI offloads cognitive tasks securely by leveraging token-optimized prompt structures and robust provider-agnostic gateways.
 
 ---
 
@@ -33,11 +33,13 @@ graph TD
     
     Router -->|Low Latency| FastLLM[Fast Response Chain (SSE Streaming)]
     Router -->|Deep Reasoning| Agentic[CrewAI Multi-Agent Pipeline]
+    Router -->|Extensibility| MCP[MCP Client / Tools Registry]
     Router -->|Retention| Memory[Memory Sync Engine]
     Router -->|Persistence| Sched[APScheduler Engine]
     
     FastLLM <--> Gateway[LiteLLM / OpenRouter Gateway]
     Agentic <--> Gateway
+    MCP <--> Servers[External MCP Servers]
     
     Gateway <--> Providers[OpenAI / Anthropic / Local LLMs]
     
@@ -49,20 +51,100 @@ graph TD
     Agentic -.-> Security[Approval Guardrail]
 ```
 
-### Key Architectural Pillars
+---
+
+## 🔄 Message Processing Lifecycle
+
+The following diagram illustrates the internal logic of how a message is handled, from initial receipt to final response, including the tiered routing and multi-layered caching strategy:
+
+```text
+Message arrives
+      │
+      ▼
+┌──────────────────┐
+│  LOCAL RESPONSE  │ ← LRU cache: exact/fuzzy match on recent messages
+│  CACHE (L0)      │   Hit? → Return instantly. No LLM call.
+└────────┬─────────┘
+         │ miss
+         ▼
+┌──────────────────┐
+│   INTENT         │ ← INTENT_SYSTEM_PROMPT (~120 tok)
+│   CLASSIFIER     │   Cached via:
+│                  │     • API prefix cache (prompt is static)
+│                  │     • Local LRU on normalized input
+└────────┬─────────┘
+         │ {tier, complexity, action}
+         │
+         ├── action=internal_query? ──→ DB lookup, skip LLM entirely
+         │
+         ▼
+┌────────────────────────────────────────────────────────┐
+│                 PROMPT ASSEMBLER                       │
+│                                                        │
+│  ┌─────────────────┐                                   │
+│  │  STATIC_CORE    │ 150 tok │ API CACHED  ████████   │
+│  │  (L1 - frozen)  │         │ cache_control:ephemeral│
+│  ├─────────────────┤         │                        │
+│  │  COGNITIVE_*    │ 30-600  │ API CACHED  ████████   │
+│  │  (L2 - per tier)│         │ cache_control:ephemeral│
+│  ├─────────────────┤         │                        │
+│  │  DYNAMIC_CTX    │ 50-150  │ FRESH       ░░░░░░░░  │
+│  │  (L3 - per msg) │         │ never cached           │
+│  └─────────────────┘                                   │
+│                                                        │
+│  Total cached: ~750 tok @ 90% discount                 │
+│  Total fresh:  ~100 tok @ full price                   │
+└───────────────────────┬────────────────────────────────┘
+                        │
+              ┌─────────┴──────────┐
+              │                    │
+         tier=fast            tier=agentic
+              │                    │
+         Direct LLM          complexity?
+         response                  │
+              │             ┌──────┴──────┐
+              │             │             │
+              │        low/medium       high
+              │             │             │
+              │       Single agent   Multi-agent
+              │       full reasoning  CrewAI pipeline
+              │             │             │
+              │             │      ┌──────┴───────┐
+              │             │      │  Specialist   │
+              │             │      │  prompts      │ ← Loaded ON DEMAND
+              │             │      │  API cached   │   Own cache block
+              │             │      │  separately   │
+              │             │      └──────┬────────┘
+              │             │             │
+              └──────┬──────┴─────────────┘
+                     │
+                     ▼
+              ┌──────────────┐
+              │ RESPONSE     │ ← Store in L0 cache for similar
+              │ CACHE WRITE  │   future queries
+              └──────┬───────┘
+                     │
+                     ▼
+               Response to user
+```
+
+---
+
 
 1. **Adaptive Memory Engine 🧠**
-   - **Short-Term Context:** Rolling window summarization to maintain conversation continuity without blowing up token limits.
-   - **Long-Term Fact Store:** Background asynchronous extraction of persistent user facts—preferences, habits, personal details—stored via PGVector and retrieved dynamically using similarity search. Atomic database transactions ensure memory safety.
-   
-2. **Hybrid Intent Routing 🚦**
-   - Uses native structured outputs (JSON schema matching) to securely classify incoming commands into `simple`, `complex`, or `scheduled` task tiers, drastically reducing costs and latency for simple text queries while bringing heavy multi-agent pipelines online only when necessary.
-   
-3. **Approval Guardrails 🛡️**
-   - Implements a strict Human-In-The-Loop (HITL) system for high-impact actions (e.g. sending emails or modifying calendar events). Actions pause, alert the admin, and proceed or fail flawlessly based on inline Telegram button responses.
-   
-4. **Reliable LLM Fallbacks 📡**
-   - A robust HTTPX-based fallback chain ensures high availability. If the primary Large Language Model experiences rate limits (429) or downtime (5xx), the system seamlessly switches to a fallback provider and streams chunks via Server-Sent Events (SSE) back to the user.
+   - **Short-Term Context:** Rolling window summarization to maintain conversation continuity.
+   - **Long-Term Fact Store:** Background asynchronous extraction of persistent user facts stored via PGVector and retrieved dynamically using similarity search.
+
+2. **Model Context Protocol (MCP) Support 🔌**
+   - **Extensible Architecture:** Connects to standard MCP servers (Google, Slack, GitHub, local tools) through a centralized `tools_registry`, allowing the bot to interact with your external ecosystem seamlessly.
+
+3. **Hybrid Intent Routing & Token Optimization 🚦**
+   - **Caching-Aware Prompts:** Uses structured outputs and token-optimized prompt templates designed to maximize OpenAI's prefix caching, significantly reducing costs and latency.
+   - **Smart Routing:** Classifies commands into `simple`, `complex`, or `scheduled` tiers, ensuring heavy pipelines are only used when necessary.
+    
+4. **Approval Guardrails & Fallbacks 🛡️**
+   - **HITL System:** Strict Human-In-The-Loop system for high-impact actions via interactive Telegram buttons.
+   - **Resilient Gateways:** A robust HTTPX-based fallback chain ensures high availability across multiple LLM providers.
 
 ---
 

@@ -60,24 +60,51 @@ async def _call_openai(
     return await _do_call()
 
 
+from src.llm.openai_client import chat_openai
+
 async def call_with_fallback(
     messages: list[dict],
     primary_model: str,
     fallback_model: Optional[str],
     max_tokens: int,
     response_format: Optional[dict] = None,
+    metadata: Optional[dict] = None,
 ) -> tuple[str, str, int]:
     """
     Try primary model; fall back to fallback_model on 429/5xx.
-    Returns (response_text, model_used, total_tokens).
+    Metadata includes: user_facts, servers, tier, active_task for caching.
     """
     limiter = get_rate_limiter()
     await limiter.acquire()
 
+    # Extract metadata for prefix caching
+    meta = metadata or {}
+    user_message = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+    history = [m for m in messages if m["role"] != "system" and m != messages[-1]]
+
     for model in filter(None, [primary_model, fallback_model]):
         try:
             logger.debug("Calling model: %s", model)
-            text, tokens = await _call_openai(model, messages, max_tokens, response_format)
+            
+            # Use the new cached client for OpenAI models
+            if "gpt-" in model or "o1-" in model:
+                text, tokens = await chat_openai(
+                    user_message=user_message,
+                    tier=meta.get("tier", "agentic"),
+                    user_facts=meta.get("user_facts"),
+                    servers=meta.get("servers"),
+                    active_task=meta.get("active_task"),
+                    history=history,
+                    model=model,
+                    max_tokens=max_tokens,
+                    response_format=response_format,
+                )
+            else:
+                # Fallback to standard HTTPX call for non-OpenAI models (via OpenRouter or others)
+                # Note: This part needs to handle non-cached logic or be refactored further
+                from src.llm.fallback_chain import _call_openai
+                text, tokens = await _call_openai(model, messages, max_tokens, response_format)
+
             logger.info("LLM call OK | model=%s tokens=%d", model, tokens)
             return text, model, tokens
         except httpx.HTTPStatusError as exc:

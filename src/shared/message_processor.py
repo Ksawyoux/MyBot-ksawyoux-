@@ -9,6 +9,10 @@ from typing import Optional, Dict, Any, List
 
 from src.utils.logging import get_logger
 from src.llm.gateway import complete
+from src.db.connection import get_db
+from src.db.models import Fact
+from src.mcp.client import get_mcp_client
+from src.config.prompts import build_system_prompt
 from src.db.conversations import save_message
 from src.db.tasks import create_task, update_task
 from src.memory.short_term import get_short_term_context
@@ -16,6 +20,9 @@ from src.memory.summarizer import summarize_session
 from src.memory.fact_extractor import extract_and_store_facts
 from src.router.context_enricher import enrich_prompt_with_context
 from src.router.task_classifier import classify_task
+from src.router.router import route_message # Keep for now as part of the flow or refactor out
+from src.config.routing import route_by_action
+from src.handlers.core import register_core_handlers
 from src.output.core.envelope import OutputEnvelope
 from src.output.templates.responses.simple_answer import SimpleAnswerTemplate
 from src.output.templates.responses.structured_result import StructuredResultTemplate
@@ -26,8 +33,9 @@ from src.scheduler.jobs import run_scheduled_agent_task
 logger = get_logger(__name__)
 
 class MessageProcessor:
-    def __init__(self, system_prompt: str):
-        self.system_prompt = system_prompt
+    def __init__(self):
+        # Initialize the routing system
+        register_core_handlers()
 
     def _get_skill_prompt(self, active_skill: Optional[str]) -> str:
         """Returns the content of the active skill's SKILL.md file if one is active."""
@@ -56,9 +64,23 @@ class MessageProcessor:
         Handles memory, intent, task execution and database updates.
         Returns an OutputEnvelope that can be rendered by the caller.
         """
+        # 0. Fetch Fresh Context for System Prompt
+        with get_db() as db:
+            facts = db.query(Fact).filter(Fact.superseded_by == None).all()
+            user_facts = [{"key": f.key, "value": f.value} for f in facts]
+
+        client = get_mcp_client()
+        servers = client.get_connected_servers()
+        
+        # Determine tier (initial guess is agentic, refined after classification)
+        system_prompt = build_system_prompt(
+            user_facts=user_facts,
+            connected_servers=servers,
+            tier="agentic"
+        )
         
         # Merge skill prompt if provided
-        effective_system_prompt = self.system_prompt + self._get_skill_prompt(active_skill)
+        effective_system_prompt = system_prompt + self._get_skill_prompt(active_skill)
         
         # Determine raw text representation for databases and classification
         if isinstance(content, list):
@@ -117,103 +139,54 @@ class MessageProcessor:
         task_id = create_task(task_type, {"session_id": session_id, "prompt": user_text[:500]}, priority=priority)
         update_task(task_id, status="in_progress")
 
+        # 6. Hybrid Routing (Internal vs External)
+        internal_response = await route_message(user_text, classification["intent"], {"session_id": session_id})
+        if internal_response:
+            logger.info("Request handled by internal router.")
+            save_message(session_id, "assistant", internal_response)
+            output = SimpleAnswerTemplate(text=internal_response, task_id=str(task_id)).render()
+            update_task(task_id, status="completed", model_used="internal-router", output_data=output.model_dump(mode='json'))
+            return output
+
+        # Prepare metadata for prefix caching and handlers
+        message_tier = classification["intent"].get("tier", "agentic")
+        metadata = {
+            "user_facts": user_facts,
+            "servers": servers,
+            "tier": message_tier,
+            "active_task": None # Add task context if available in future phases
+        }
+
+        # 7. Explicit Routing Execution
         try:
-            output = None
-            response_text = ""
-            model_used = ""
-            tokens_used = 0
+            # Prepare context for handlers
+            handler_context = {
+                "session_id": session_id,
+                "task_id": task_id,
+                "user_facts": user_facts,
+                "servers": servers,
+                "system_prompt": effective_system_prompt,
+                "history": context_history,
+                "metadata": metadata,
+                "enriched_content": enriched_content
+            }
 
-            if task_type == "simple":
-                # Determine tier (vision vs lightweight)
-                tier = "vision" if isinstance(content, list) else "lightweight"
-                
-                # Direct LLM call
-                result = await complete(
-                    prompt=enriched_content,
-                    model_tier=tier,
-                    system_prompt=effective_system_prompt,
-                    conversation_history=context_history,
-                    priority=0,
-                )
-                response_text = result["response"]
-                model_used = result["model"]
-                tokens_used = result["tokens"]
-                
+            # Execute via routing config
+            response_text = await route_by_action(classification["intent"], user_text, handler_context)
+            
+            # If the handler didn't return an OutputEnvelope, wrap it
+            if isinstance(response_text, str):
                 output = SimpleAnswerTemplate(text=response_text, task_id=str(task_id)).render()
-                output.metadata = {"model": model_used}
-
-            elif task_type == "complex":
-                try:
-                    # Execute via CrewAI (Note: Agents usually expect text, so we pass enriched text)
-                    if isinstance(content, list):
-                        logger.warning("CrewAI does not support multimodal agents out of the box natively yet, passing text representation.")
-                        
-                    from src.agents.crew_manager import execute_crew_task
-                    crew_result = await execute_crew_task(classification["intent"], enriched_text_prompt, task_id)
-                    response_text = crew_result
-                    model_used = "crewai-pipeline"
-                    tokens_used = 0 
-                    
-                    output = StructuredResultTemplate(data=response_text, task_id=str(task_id)).render()
-                    output.metadata = {"model": model_used}
-                    
-                except (ImportError, ModuleNotFoundError):
-                    logger.warning("CrewAI not installed. Falling back to capable LLM for complex task.")
-                    result = await complete(
-                        prompt=enriched_content,
-                        model_tier="capable",
-                        system_prompt=effective_system_prompt,
-                        conversation_history=context_history,
-                        priority=0,
-                    )
-                    response_text = result["response"]
-                    model_used = result["model"]
-                    tokens_used = result["tokens"]
-                    output = SimpleAnswerTemplate(text=response_text, task_id=str(task_id)).render()
-                    output.metadata = {"model": model_used}
-
-            elif task_type == "scheduled":
-                # Phase 7: Send to Scheduler
-                extract_prompt = f"Convert this request into a cron expression and a clean prompt string.\nRequest: {user_text}\nOutput FORMAT EXACTLY like this:\nCRON: * * * * *\nPROMPT: task description"
-                
-                result = await complete(
-                    prompt=extract_prompt,
-                    model_tier="lightweight",
-                    system_prompt="You are a strict cron job parser. Reply ONLY with the requested format.",
-                )
-                
-                lines = result["response"].strip().split('\n')
-                cron_expr = None
-                task_prompt = user_text
-                
-                for line in lines:
-                    if line.startswith("CRON:"):
-                        cron_expr = line.replace("CRON:", "").strip()
-                    elif line.startswith("PROMPT:"):
-                        task_prompt = line.replace("PROMPT:", "").strip()
-                
-                if not cron_expr:
-                    response_text = "❌ Could not understand the schedule format."
-                    output = ErrorTemplate(title="Invalid Schedule", description="Could not understand the schedule format. Please try rephrasing (e.g., 'every day at 9am').", task_id=str(task_id)).render()
-                else:
-                    from apscheduler.triggers.cron import CronTrigger
-                    try:
-                        trigger = CronTrigger.from_crontab(cron_expr)
-                        scheduler = get_scheduler()
-                        job = scheduler.add_job(
-                            run_scheduled_agent_task,
-                            trigger=trigger,
-                            args=[session_id, task_prompt],
-                            name=f"User Task: {task_prompt[:30]}"
-                        )
-                        response_text = f"⏰ Job Scheduled\nID: {job.id}\nSchedule: {cron_expr}\nTask: {task_prompt}"
-                        output = SimpleAnswerTemplate(text=response_text, task_id=str(task_id)).render()
-                    except ValueError:
-                        response_text = f"❌ Invalid cron format extracted: {cron_expr}"
-                        output = ErrorTemplate(title="Invalid Schedule", description=f"Invalid cron format extracted: {cron_expr}", task_id=str(task_id)).render()
-                
-                model_used = result["model"]
-                tokens_used = result.get("tokens", 0)
+                model_used = "routed-handler" # Could be refined by handlers
+            else:
+                # Assume it's already an OutputEnvelope or similar
+                output = response_text
+                response_text = getattr(output, 'text', str(output)) # Simplification
+            
+            # Tokens are currently tracked within handlers if needed, 
+            # defaulting to 0 here for simplicity in this refactor step.
+            tokens_used = 0 
+            model_used = "routed-handler"
 
             # Finalize
             if output:
