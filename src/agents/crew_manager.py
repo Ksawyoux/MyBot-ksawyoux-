@@ -108,21 +108,16 @@ def _create_langchain_tools(task_id: int) -> list[BaseTool]:
 
 def _get_crewai_llm(model_tier: str = "balanced"):
     from langchain_openai import ChatOpenAI
-    from src.config.settings import OPENROUTER_API_KEY
+    from src.config.settings import OPENAI_API_KEY, OPENAI_BASE_URL
     from src.config.models import MODEL_TIERS
     
     tier_config = MODEL_TIERS[model_tier]
     
     return ChatOpenAI(
-        model=f"openrouter/{tier_config['primary']}",
-        api_key=OPENROUTER_API_KEY,
-        base_url="https://openrouter.ai/api/v1",
+        model=tier_config['primary'],
+        api_key=OPENAI_API_KEY,
+        base_url=OPENAI_BASE_URL,
         max_tokens=tier_config["max_tokens"],
-        # Add headers required by OpenRouter
-        default_headers={
-            "HTTP-Referer": "https://github.com/Ksawyoux",
-            "X-Title": "Atlasia AI Agent",
-        }
     )
 
 
@@ -172,6 +167,13 @@ async def execute_crew_task(intent: dict, prompt: str, task_id: int) -> str:
         agent.tools = tools
         agents.append(agent)
         tasks.append(create_research_task(agent, prompt))
+        
+    elif action == "briefing":
+        from src.agents.briefing_agent import create_briefing_agent, create_briefing_task
+        agent = create_briefing_agent(llm)
+        agent.tools = tools
+        agents.append(agent)
+        tasks.append(create_briefing_task(agent, prompt))
         
     else:
         # Default: general research and assistant

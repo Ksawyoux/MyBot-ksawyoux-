@@ -9,41 +9,38 @@ from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Global model cache
-_model = None
-_model_lock = asyncio.Lock()
-
-
-def _load_model_sync():
-    """Synchronous model loading to be run in a thread."""
-    from sentence_transformers import SentenceTransformer
-    logger.info("Lazy-loading sentence-transformers model (all-MiniLM-L6-v2) in background thread...")
-    return SentenceTransformer("all-MiniLM-L6-v2")
-
+import httpx
+from src.config.settings import OPENAI_API_KEY, OPENAI_BASE_URL
 
 async def generate_embedding(text: str) -> Optional[list[float]]:
     """
-    Generate a 384-dimensional vector embedding for the given text.
-    Async-friendly: loads model and runs inference in a threadpool.
+    Generate a vector embedding for the given text using OpenAI API.
+    Uses text-embedding-3-small (1536 dimensions).
     """
-    global _model
-    
-    async with _model_lock:
-        if _model is None:
-            try:
-                _model = await asyncio.to_thread(_load_model_sync)
-                logger.info("SentenceTransformer loaded successfully.")
-            except ImportError:
-                logger.error("sentence-transformers not installed. Embeddings disabled.")
-                return None
-            except Exception as exc:
-                logger.error("Failed to load SentenceTransformer: %s", exc)
-                return None
+    if not OPENAI_API_KEY:
+        logger.error("OPENAI_API_KEY is not set. Cannot generate embeddings.")
+        return None
 
     try:
-        # Run inference in a separate thread to avoid blocking the event loop
-        vector = await asyncio.to_thread(_model.encode, text)
-        return vector.tolist()
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": "text-embedding-3-small",
+            "input": text,
+        }
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{OPENAI_BASE_URL}/embeddings",
+                headers=headers,
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data["data"][0]["embedding"]
+            
     except Exception as exc:
-        logger.error("Failed to generate embedding: %s", exc, exc_info=True)
+        logger.error("Failed to generate OpenAI embedding: %s", exc, exc_info=True)
         return None

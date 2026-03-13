@@ -86,7 +86,25 @@ def main() -> None:
 
 
         # Start the APScheduler engine
-        get_scheduler()
+        scheduler = get_scheduler()
+
+        # Phase 09 - Register the daily 08:00 Morning Briefing
+        from apscheduler.triggers.cron import CronTrigger
+        from src.scheduler.jobs import run_morning_briefing
+        from src.config.settings import TELEGRAM_ADMIN_USER_ID
+        
+        # We use the admin's Telegram ID as the primary session ID for system jobs
+        job_id = "daily_morning_briefing"
+        if not scheduler.get_job(job_id):
+            scheduler.add_job(
+                run_morning_briefing,
+                trigger=CronTrigger(hour=8, minute=0),
+                args=[str(TELEGRAM_ADMIN_USER_ID)],
+                id=job_id,
+                name="Daily Morning Briefing",
+                replace_existing=True
+            )
+            logger.info("Registered daily morning briefing job for 08:00.")
 
         # Telegram bot runs on the main thread
         run_bot()

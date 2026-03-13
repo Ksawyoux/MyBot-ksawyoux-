@@ -29,7 +29,7 @@ from src.router.task_classifier import classify_task
 
 # Phase 5 approval imports
 from src.approval.queue import get_pending_approvals, update_approval_status
-from src.bot.keyboards import get_approval_keyboard, get_resolved_keyboard
+from src.bot.keyboards import get_approval_keyboard, get_resolved_keyboard, get_skills_keyboard
 
 # Phase 7 scheduler imports
 from src.scheduler.engine import get_scheduler
@@ -44,25 +44,12 @@ from src.output.core.actions import Action, ActionHandler, ActionType
 
 # Shared logic
 from src.shared.message_processor import MessageProcessor
+from src.config.prompts import build_system_prompt
 
 logger = get_logger(__name__)
 
-SYSTEM_PROMPT = (
-    "You are a personal AI assistant created by Ksawyoux to be highly helpful, proactive, and concise. "
-    "You have access to email, calendar, and web search tools to complete tasks for the user. "
-    "If the user asks who you are, what you can do, or engages in conversation, answer confidently as a capable AI assistant. NEVER search the web for questions about your own identity.\n\n"
-    "## Output Formatting Rules (MANDATORY):\n"
-    "1. Use **bold headers** (e.g., *Header*) for distinct sections. NEVER use markdown headers like '# Header'.\n"
-    "2. Use bullet points with relevant emojis (e.g., 📧 for email, 📅 for calendar) for lists.\n"
-    "3. Keep responses structured and visually professional.\n"
-    "4. Use Telegram-compatible Legacy Markdown (use the '*' character for bold, '_' for italics).\n"
-    "5. Use a friendly and professional tone.\n\n"
-    "When asked to perform an action that requires tools (sending email, creating events, searching the web), "
-    "acknowledge the request and explain what you will do."
-)
-
 # Initialize shared processor
-processor = MessageProcessor(SYSTEM_PROMPT)
+processor = MessageProcessor(build_system_prompt())
 
 
 def is_admin(update: Update) -> bool:
@@ -131,6 +118,7 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/status — System status & stats\n"
         "/tasks — Recent task history\n"
         "/pending — Pending approvals\n"
+        "/skills — Select an active skill\n"
         "/memory — Memory stats\n"
         "/memory forget <id> — Remove a fact\n"
         "/schedule list — Show scheduled jobs\n"
@@ -138,12 +126,81 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/schedule pause <id> — Pause a job\n"
         "/schedule resume <id> — Resume a job\n"
         "/schedule delete <id> — Delete a job\n"
+        "/briefing — Generate morning digest\n"
         "/cancel — Cancel current operation\n\n"
         "Or just *send any message* and I'll answer it!"
     )
     output = OutputBuilder().content_text(text).build()
     msg = TelegramRenderer(user_transparency_tier=TransparencyTier.SILENT).render(output)
     await update.message.reply_text(msg.text, parse_mode=msg.parse_mode)
+
+
+async def skills_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await admin_guard(update, context):
+        return
+    
+    keyboard = get_skills_keyboard(page=0)
+    current_skill = context.user_data.get('active_skill')
+    
+    text = "🧠 *Select a Skill*\n"
+    if current_skill:
+        text += f"Currently active: `{current_skill}`\n"
+    else:
+        text += "No active skill.\n"
+    text += "\nChoose a new skill to load its instructions:"
+
+    await update.message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
+
+async def skills_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline button clicks for skill pagination and selection."""
+    query = update.callback_query
+    
+    if not is_admin(update):
+        await query.answer("⛔ Unauthorized.", show_alert=True)
+        return
+
+    data = query.data
+    
+    if data == "ignore_pagination":
+        await query.answer()
+        return
+
+    if data.startswith("skills_page_"):
+        page = int(data.split("_")[2])
+        keyboard = get_skills_keyboard(page=page)
+        
+        current_skill = context.user_data.get('active_skill')
+        text = "🧠 *Select a Skill*\n"
+        if current_skill:
+            text += f"Currently active: `{current_skill}`\n"
+        else:
+            text += "No active skill.\n"
+        text += "\nChoose a new skill to load its instructions:"
+
+        try:
+            await query.edit_message_text(text=text, reply_markup=keyboard, parse_mode="Markdown")
+        except Exception:
+            # Message is not modified exception
+            pass
+        await query.answer()
+
+    elif data.startswith("select_skill_"):
+        skill_name = data.replace("select_skill_", "")
+        context.user_data["active_skill"] = skill_name
+        
+        keyboard = get_skills_keyboard(page=0)
+        
+        text = f"✅ Skill activated: `{skill_name}`\n\nI will now use these instructions for my responses."
+        await query.edit_message_text(text=text, reply_markup=keyboard, parse_mode="Markdown")
+        await query.answer(f"Activated {skill_name}!")
+        
+    elif data == "clear_skill":
+        context.user_data.pop("active_skill", None)
+        keyboard = get_skills_keyboard(page=0)
+        text = "Cleared active skill. Returning to default behavior."
+        await query.edit_message_text(text=text, reply_markup=keyboard, parse_mode="Markdown")
+        await query.answer("Skill cleared.")
 
 
 async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -312,6 +369,26 @@ async def schedule_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text(f"⚠️ Failed: {exc}")
 
 
+async def briefing_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manually trigger the morning briefing."""
+    if not await admin_guard(update, context):
+        return
+        
+    session_id = _get_session_id(context)
+    await update.message.reply_text("⏳ Generating your Morning Briefing... This may take a minute as I review your calendar and emails.")
+    await update.message.chat.send_action(ChatAction.TYPING)
+    
+    from src.scheduler.jobs import run_morning_briefing
+    import asyncio
+    
+    try:
+        # Run in a background thread to avoid blocking the Telegram event loop
+        await asyncio.to_thread(run_morning_briefing, session_id)
+    except Exception as exc:
+        logger.error("Manual briefing failed: %s", exc)
+        await update.message.reply_text("⚠️ Failed to generate briefing.")
+
+
 async def pending_approvals_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show list of all pending approvals."""
     if not await admin_guard(update, context):
@@ -384,11 +461,13 @@ async def approval_callback_handler(update: Update, context: ContextTypes.DEFAUL
                     execution_result = f"\n*Result:* {result['message']}"
                 elif isinstance(result, dict) and "error" in result:
                     execution_result = f"\n*Result:* Error - {result['error']}"
+                    update_approval_status(app_id, "failed")
                 else:
                     execution_result = "\n*Result:* Execution triggered successfully."
             except Exception as e:
                 logger.error("Failed to execute approved action: %s", e)
                 execution_result = f"\n*Result:* Failed to execute - {str(e)}"
+                update_approval_status(app_id, "failed")
         
         # Update message
         original_text = query.message.text or f"Approval #{app_id}"
@@ -414,18 +493,62 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not await admin_guard(update, context):
         return
 
-    user_text = update.message.text or ""
-    if not user_text.strip():
+    # Show typing indicator early
+    await update.message.chat.send_action(ChatAction.TYPING)
+
+    content: str | list = ""
+    user_text = update.message.text or update.message.caption or ""
+    
+    # ── Check for Media (Images / PDFs) ──
+    try:
+        if update.message.photo:
+            # Get largest photo
+            photo = update.message.photo[-1]
+            file = await context.bot.get_file(photo.file_id)
+            file_bytes = await file.download_as_bytearray()
+            
+            import base64
+            b64_img = base64.b64encode(file_bytes).decode('utf-8')
+            
+            content = [
+                {"type": "text", "text": user_text if user_text else "What is in this image?"},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}
+            ]
+            logger.info("Intercepted image (%d bytes)", len(file_bytes))
+            
+        elif update.message.document:
+            doc = update.message.document
+            if doc.mime_type == "application/pdf":
+                file = await context.bot.get_file(doc.file_id)
+                file_bytes = await file.download_as_bytearray()
+                
+                logger.info("Intercepted PDF (%d bytes). Extracting text...", len(file_bytes))
+                import pymupdf
+                with pymupdf.open(stream=file_bytes, filetype="pdf") as pdf:
+                    pdf_text = chr(10).join([page.get_text() for page in pdf])
+                    
+                full_text = f"{user_text}\n\n[PDF Contents]:\n{pdf_text[:30000]}" # cap at 30k chars
+                content = full_text.strip()
+            # If we want to support other docs later, we'd add them here
+            else:
+                content = user_text
+        else:
+            content = user_text
+            
+    except Exception as exc:
+        logger.error("Error processing media attachment: %s", exc)
+        await update.message.reply_text("⚠️ Failed to read attachment. Please try again.")
+        return
+
+    if not content:
         return
 
     session_id = _get_session_id(context)
-    logger.info("Message from session %s: %.80s", session_id[:8], user_text)
-
-    # Show typing indicator
-    await update.message.chat.send_action(ChatAction.TYPING)
+    logger.info("Message from session %s", session_id[:8])
 
     # ── Task Execution (Delegated to Shared Logic) ──
-    output = await processor.process_message(session_id, user_text)
+    active_skill = context.user_data.get("active_skill")
+    output = await processor.process_message(session_id, content, active_skill=active_skill)
 
     # ── Presentation Layer (Telegram-Specific) ──
     renderer = TelegramRenderer(user_transparency_tier=TransparencyTier.STANDARD)

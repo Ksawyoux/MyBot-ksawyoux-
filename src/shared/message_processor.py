@@ -3,6 +3,7 @@ src/shared/message_processor.py — Core message processing logic decoupled from
 """
 
 import asyncio
+import os
 import httpx
 from typing import Optional, Dict, Any, List
 
@@ -28,12 +29,45 @@ class MessageProcessor:
     def __init__(self, system_prompt: str):
         self.system_prompt = system_prompt
 
-    async def process_message(self, session_id: str, user_text: str) -> OutputEnvelope:
+    def _get_skill_prompt(self, active_skill: Optional[str]) -> str:
+        """Returns the content of the active skill's SKILL.md file if one is active."""
+        if not active_skill:
+            return ""
+            
+        try:
+            skill_file_path = os.path.join(
+                os.path.dirname(os.path.dirname(__file__)),
+                "skills",
+                active_skill,
+                "SKILL.md"
+            )
+            if os.path.exists(skill_file_path):
+                with open(skill_file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                return f"\n\n--- ACTIVE SKILL: {active_skill} ---\n{content}\n--------------------------------\n"
+        except Exception as e:
+            logger.error("Failed to read skill %s: %s", active_skill, e)
+            
+        return ""
+
+    async def process_message(self, session_id: str, content: str | list, active_skill: Optional[str] = None) -> OutputEnvelope:
         """
         Main entry point for processing a user message.
         Handles memory, intent, task execution and database updates.
         Returns an OutputEnvelope that can be rendered by the caller.
         """
+        
+        # Merge skill prompt if provided
+        effective_system_prompt = self.system_prompt + self._get_skill_prompt(active_skill)
+        
+        # Determine raw text representation for databases and classification
+        if isinstance(content, list):
+            user_text = " ".join([item.get("text", "") for item in content if item.get("type") == "text"]).strip()
+            if not user_text:
+                user_text = "[Media Attachment]"
+        else:
+            user_text = content
+            
         # 1. Save user message
         save_message(session_id, "user", user_text)
 
@@ -48,13 +82,35 @@ class MessageProcessor:
             # Keep only the last 5 messages for this immediate prompt
             context_history = context_history[-5:]
 
-        # 3. Enrich prompt with Long-Term Memory (vector search)
-        enriched_prompt = await enrich_prompt_with_context(user_text)
+        # 3. Enrich text prompt with Long-Term Memory (vector search)
+        enriched_text_prompt = await enrich_prompt_with_context(user_text)
+        
+        # Combine if multimodal
+        if isinstance(content, list):
+            # Find the text part and replace it, or append if missing
+            enriched_content = []
+            text_injected = False
+            for item in content:
+                if item.get("type") == "text":
+                    enriched_content.append({"type": "text", "text": enriched_text_prompt})
+                    text_injected = True
+                else:
+                    enriched_content.append(item)
+            if not text_injected:
+                enriched_content.append({"type": "text", "text": enriched_text_prompt})
+        else:
+            enriched_content = enriched_text_prompt
 
         # 4. Intent Classification
         classification = await classify_task(user_text)
         task_type = classification["type"]
         priority = classification["priority"]
+        
+        # If media is present, route to simple LLM but use vision tier
+        if isinstance(content, list) and task_type != "simple":
+            logger.info("Media attachment detected. Coercing to lightweight vision task.")
+            task_type = "simple"
+            
         logger.info("Message classified as %s (priority %d)", task_type, priority)
 
         # 5. Task Creation
@@ -68,11 +124,14 @@ class MessageProcessor:
             tokens_used = 0
 
             if task_type == "simple":
+                # Determine tier (vision vs lightweight)
+                tier = "vision" if isinstance(content, list) else "lightweight"
+                
                 # Direct LLM call
                 result = await complete(
-                    prompt=enriched_prompt,
-                    model_tier="lightweight",
-                    system_prompt=self.system_prompt,
+                    prompt=enriched_content,
+                    model_tier=tier,
+                    system_prompt=effective_system_prompt,
                     conversation_history=context_history,
                     priority=0,
                 )
@@ -85,9 +144,12 @@ class MessageProcessor:
 
             elif task_type == "complex":
                 try:
-                    # Execute via CrewAI
+                    # Execute via CrewAI (Note: Agents usually expect text, so we pass enriched text)
+                    if isinstance(content, list):
+                        logger.warning("CrewAI does not support multimodal agents out of the box natively yet, passing text representation.")
+                        
                     from src.agents.crew_manager import execute_crew_task
-                    crew_result = await execute_crew_task(classification["intent"], enriched_prompt, task_id)
+                    crew_result = await execute_crew_task(classification["intent"], enriched_text_prompt, task_id)
                     response_text = crew_result
                     model_used = "crewai-pipeline"
                     tokens_used = 0 
@@ -98,9 +160,9 @@ class MessageProcessor:
                 except (ImportError, ModuleNotFoundError):
                     logger.warning("CrewAI not installed. Falling back to capable LLM for complex task.")
                     result = await complete(
-                        prompt=enriched_prompt,
+                        prompt=enriched_content,
                         model_tier="capable",
-                        system_prompt=self.system_prompt,
+                        system_prompt=effective_system_prompt,
                         conversation_history=context_history,
                         priority=0,
                     )
@@ -195,3 +257,4 @@ class MessageProcessor:
             logger.error("Unexpected error in MessageProcessor: %s", exc, exc_info=True)
             update_task(task_id, status="failed", error_message=str(exc))
             return ErrorTemplate(title="Unexpected Error", description="Sorry, I ran into an unexpected error processing your request.", task_id=str(task_id)).render()
+

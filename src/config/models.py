@@ -6,28 +6,34 @@ from typing import Optional
 
 MODEL_TIERS: dict = {
     "lightweight": {
-        "primary": "meta-llama/llama-3.1-8b-instruct",
-        "fallback": "mistralai/mistral-7b-instruct:free",
+        "primary": "gpt-4o-mini",
+        "fallback": None,
         "tasks": ["classification", "simple_qa", "formatting", "intent_parsing"],
         "max_tokens": 1024,
     },
     "balanced": {
-        "primary": "meta-llama/llama-3.1-8b-instruct",
-        "fallback": "mistralai/mixtral-8x7b-instruct",
+        "primary": "gpt-4o-mini",
+        "fallback": None,
         "tasks": ["email_drafting", "summarization", "data_extraction", "calendar_parsing"],
         "max_tokens": 2048,
     },
     "capable": {
-        "primary": "meta-llama/llama-3.1-70b-instruct",
-        "fallback": "meta-llama/llama-3-70b-instruct",
+        "primary": "gpt-4o-mini",
+        "fallback": None,
         "tasks": ["research", "complex_reasoning", "planning", "creative_writing"],
         "max_tokens": 4096,
     },
     "system": {
-        "primary": "google/gemma-2-9b-it",
+        "primary": "gpt-4o-mini",
         "fallback": None,
         "tasks": ["fact_extraction", "summarization_internal"],
         "max_tokens": 1024,
+    },
+    "vision": {
+        "primary": "gpt-4o-mini",
+        "fallback": None,
+        "tasks": ["image_understanding", "multimodal_processing"],
+        "max_tokens": 2048,
     },
 }
 

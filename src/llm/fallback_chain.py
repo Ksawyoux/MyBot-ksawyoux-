@@ -7,18 +7,18 @@ import httpx
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 from typing import Optional
 
-from src.config.settings import OPENROUTER_API_KEY, OPENROUTER_BASE_URL
+from src.config.settings import OPENAI_API_KEY, OPENAI_BASE_URL
 from src.llm.rate_limiter import get_rate_limiter
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-async def _call_openrouter(
+async def _call_openai(
     model: str, messages: list[dict], max_tokens: int, response_format: Optional[dict] = None
 ) -> tuple[str, int]:
     """
-    Make a single OpenRouter chat completion call.
+    Make a single OpenAI chat completion call.
     Returns (response_text, total_tokens).
     Raises httpx.HTTPStatusError on non-2xx.
     """
@@ -30,9 +30,7 @@ async def _call_openrouter(
     )
     async def _do_call():
         headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "HTTP-Referer": "https://github.com/Ksawyoux/ai-agent",
-            "X-Title": "Personal AI Agent",
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
             "Content-Type": "application/json",
         }
         payload = {
@@ -45,14 +43,14 @@ async def _call_openrouter(
             
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
-                f"{OPENROUTER_BASE_URL}/chat/completions",
+                f"{OPENAI_BASE_URL}/chat/completions",
                 headers=headers,
                 json=payload,
             )
             try:
                 resp.raise_for_status()
             except httpx.HTTPStatusError as e:
-                logger.error("OpenRouter error response: %s", e.response.text)
+                logger.error("OpenAI error response: %s", e.response.text)
                 raise
             data = resp.json()
             text = data["choices"][0]["message"]["content"]
@@ -79,7 +77,7 @@ async def call_with_fallback(
     for model in filter(None, [primary_model, fallback_model]):
         try:
             logger.debug("Calling model: %s", model)
-            text, tokens = await _call_openrouter(model, messages, max_tokens, response_format)
+            text, tokens = await _call_openai(model, messages, max_tokens, response_format)
             logger.info("LLM call OK | model=%s tokens=%d", model, tokens)
             return text, model, tokens
         except httpx.HTTPStatusError as exc:
@@ -107,15 +105,70 @@ async def stream_with_fallback(
 ):
     """
     Like call_with_fallback, but yields (chunk_text, model_used).
-    Currently naive: just returns the full response as a single chunk because OpenRouter
-    streaming requires parsing SSE which adds too much complexity here for now.
-    But we expose the async generator signature so the caller can stream.
+    Implement true streaming by parsing SSE chunks from the OpenAI API.
     """
-    text, model, tokens = await call_with_fallback(
-        messages, primary_model, fallback_model, max_tokens, response_format
-    )
-    # Simulate a stream by yielding the whole thing. 
-    # To truly stream, we'd use httpx astream() and map SSE events.
-    yield text, model
-    # Return tokens as the last item or via some side-channel if strictly required,
-    # but the caller usually recalculates tokens for streams anyway.
+    import json
+    limiter = get_rate_limiter()
+    await limiter.acquire()
+
+    for model in filter(None, [primary_model, fallback_model]):
+        try:
+            logger.debug("Streaming model: %s", model)
+            headers = {
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "stream": True,  # Enable SSE streaming
+            }
+            if response_format:
+                payload["response_format"] = response_format
+                
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                async with client.stream(
+                    "POST", 
+                    f"{OPENAI_BASE_URL}/chat/completions", 
+                    json=payload, 
+                    headers=headers
+                ) as response:
+                    if response.status_code == 429:
+                        limiter.trigger_cooldown()
+                        logger.warning("429 from %s — trying fallback", model)
+                        continue # try next model
+                    elif response.status_code >= 500:
+                        logger.warning("5xx from %s (%d) — trying fallback", model, response.status_code)
+                        continue
+                    
+                    response.raise_for_status()
+
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        
+                        data_str = line[6:].strip()
+                        if data_str == "[DONE]":
+                            break
+                            
+                        try:
+                            chunk_data = json.loads(data_str)
+                            delta = chunk_data["choices"][0].get("delta", {})
+                            content = delta.get("content")
+                            if content:
+                                yield content, model
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            pass
+
+            logger.info("LLM stream OK | model=%s", model)
+            return # successfully streamed
+            
+        except httpx.HTTPStatusError as exc:
+            # Re-raise unless we are trying fallbacks handled above
+            raise
+        except Exception as exc:
+            logger.error("Unexpected error streaming %s: %s", model, exc)
+            raise
+
+    raise RuntimeError(f"All models failed for stream: primary={primary_model}, fallback={fallback_model}")

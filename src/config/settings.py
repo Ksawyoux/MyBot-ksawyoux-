@@ -21,8 +21,8 @@ class Settings(BaseSettings):
     TELEGRAM_ADMIN_USER_ID: int
 
     # ── LLM ───────────────────────────────────────────────────────────────────────
-    OPENROUTER_API_KEY: str
-    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    OPENAI_API_KEY: str = ""
+    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
 
     # ── Database ───────────────────────────────────────────────────────────────────
     SUPABASE_URL: str = ""
@@ -53,8 +53,8 @@ settings = Settings()
 # Alias for backward compatibility while migrating
 TELEGRAM_BOT_TOKEN = settings.TELEGRAM_BOT_TOKEN
 TELEGRAM_ADMIN_USER_ID = settings.TELEGRAM_ADMIN_USER_ID
-OPENROUTER_API_KEY = settings.OPENROUTER_API_KEY
-OPENROUTER_BASE_URL = settings.OPENROUTER_BASE_URL
+OPENAI_API_KEY = settings.OPENAI_API_KEY
+OPENAI_BASE_URL = settings.OPENAI_BASE_URL
 SUPABASE_URL = settings.SUPABASE_URL
 SUPABASE_ANON_KEY = settings.SUPABASE_ANON_KEY
 SUPABASE_SERVICE_KEY = settings.SUPABASE_SERVICE_KEY

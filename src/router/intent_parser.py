@@ -4,39 +4,9 @@ src/router/intent_parser.py — Extract intent, urgency, and entities from user 
 
 import json
 from src.utils.logging import get_logger
+from src.config.prompts import INTENT_SYSTEM_PROMPT
 
 logger = get_logger(__name__)
-
-INTENT_SYSTEM_PROMPT = """
-You are a categorization engine for an AI assistant. You do not converse. You only output JSON.
-Analyze the user's message and determine the intent.
-Return ONLY a valid JSON object matching this schema:
-{
-  "action": "question|email|calendar|search|schedule|other",
-  "urgency": "high|normal|low",
-  "entities": ["list", "of", "key", "entities"],
-  "complexity_hint": "simple|complex"
-}
-
-RULES:
-1. If the user says "Who are you?", "What can you do?", "Hi" -> {"action": "question", "urgency": "normal", "entities": [], "complexity_hint": "simple"}
-2. Any action requiring email/calendar/search MUST be "complex".
-3. Any scheduled recurring action MUST be "schedule".
-4. You MUST NOT answer the user's question. ONLY classify it.
-
-EXAMPLES:
-User: "What's the weather in Tokyo?"
-{"action": "search", "urgency": "normal", "entities": ["Tokyo", "weather"], "complexity_hint": "complex"}
-
-User: "Schedule a sync for tomorrow."
-{"action": "calendar", "urgency": "normal", "entities": ["sync", "tomorrow"], "complexity_hint": "complex"}
-
-User: "Who are you?"
-{"action": "question", "urgency": "normal", "entities": [], "complexity_hint": "simple"}
-
-YOUR OUTPUT MUST BE ONLY THE JSON OBJECT.
-"""
-
 
 def get_dynamic_system_prompt() -> str:
     import os
@@ -82,18 +52,10 @@ async def parse_intent(prompt: str) -> dict:
             model_tier="lightweight",
             system_prompt=get_dynamic_system_prompt(),
             use_cache=True,
+            response_format={"type": "json_object"}
         )
 
-        response = result["response"].strip()
-
-        # Clean markdown formatting if model misbehaves
-        if response.startswith("```json"):
-            response = response[7:]
-        if response.startswith("```"):
-            response = response[3:]
-        if response.endswith("```"):
-            response = response[:-3]
-
+        response = result["response"]
         parsed = json.loads(response.strip())
         
         # Ensure default fields

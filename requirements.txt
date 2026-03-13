@@ -44,3 +44,7 @@ croniter==2.0.5
 pydantic==2.7.4
 python-dateutil==2.9.0.post0
 pydantic-settings==2.7.1
+
+pymupdf==1.25.3
+
+pymupdf==1.25.3

@@ -51,11 +51,12 @@ def set_approval_message_id(approval_id: int, message_id: int) -> None:
 
 
 def update_approval_status(approval_id: int, status: str) -> None:
-    """Mark an approval as approved, rejected, or expired."""
+    """Mark an approval as approved, rejected, expired, or failed."""
     try:
         with get_db() as db:
-            app = db.query(Approval).filter(Approval.id == approval_id, Approval.status == 'pending').first()
-            if app:
+            # Allow transitioning from pending -> approved/rejected, or approved -> failed
+            app = db.query(Approval).filter(Approval.id == approval_id).first()
+            if app and (app.status == 'pending' or (app.status == 'approved' and status == 'failed')):
                 app.status = status
                 app.responded_at = func.now()
                 db.commit()

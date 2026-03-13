@@ -49,7 +49,7 @@ class MemoryEmbedding(Base):
     __tablename__ = 'memory_embeddings'
     id = Column(Integer, primary_key=True)
     content = Column(String, nullable=False)
-    embedding = Column(Vector(384))
+    embedding = Column(Vector(1536))
     metadata_json = Column("metadata", JSON) # metadata is a reserved word sometimes, but column is 'metadata'
     type = Column(String, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

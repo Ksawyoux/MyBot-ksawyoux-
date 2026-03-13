@@ -7,27 +7,9 @@ from src.db.connection import get_db
 from src.db.models import Fact
 from src.memory.long_term import store_long_term_memory
 from src.utils.logging import get_logger
+from src.config.prompts import EXTRACTOR_SYSTEM_PROMPT
 
 logger = get_logger(__name__)
-
-EXTRACTOR_SYSTEM_PROMPT = """
-Analyze this conversation and extract explicit, permanent facts about the user.
-Categories:
-- "preference" (likes/dislikes, physical environment preferences)
-- "knowledge" (facts about the user: name, job, location, family)
-- "pattern" (recurring habits: wakes up at 7am, travels on Tuesdays)
-
-Return ONLY a JSON list of objects matching this schema exactly:
-[
-  {
-    "category": "preference|knowledge|pattern",
-    "key": "short_topic_key_like_favorite_color",
-    "value": "The actual fact content"
-  }
-]
-If there are no new facts, return []. DO NOT include conversational filler, just the JSON.
-"""
-
 
 async def extract_and_store_facts(session_id: str, messages: list[dict]) -> int:
     """
@@ -43,24 +25,29 @@ async def extract_and_store_facts(session_id: str, messages: list[dict]) -> int:
     conv_text = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in messages)
 
     try:
+        # Prompt needs a tiny tweak to return an object because JSON mode often requires a root object
+        system_prompt = EXTRACTOR_SYSTEM_PROMPT.replace(
+            "Return ONLY a JSON list of objects", 
+            "Return ONLY a JSON object with a 'facts' key containing a list of objects"
+        )
+        
         result = await complete(
             prompt=conv_text,
             model_tier="system",
-            system_prompt=EXTRACTOR_SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             use_cache=False,
+            response_format={"type": "json_object"}
         )
 
-        response = result["response"].strip()
-
-        # Handle formatting weirdness (LLM might wrap in markdown blocks)
-        if response.startswith("```json"):
-            response = response[7:]
-        if response.startswith("```"):
-            response = response[3:]
-        if response.endswith("```"):
-            response = response[:-3]
-
-        parsed: list[dict] = json.loads(response.strip())
+        response = result["response"]
+        parsed_obj: dict = json.loads(response.strip())
+        
+        # Fallback if model just returns a list anyway
+        if isinstance(parsed_obj, list):
+            parsed = parsed_obj
+        else:
+            parsed = parsed_obj.get("facts", [])
+            
         if not parsed:
             return 0
 
@@ -93,8 +80,7 @@ async def extract_and_store_facts(session_id: str, messages: list[dict]) -> int:
                     source_session=session_id
                 )
                 db.add(fact)
-                db.commit()
-                db.refresh(fact)
+                db.flush() # Flush to get fact ID for embeddings, but don't commit yet
                 fact_id = fact.id
 
                 # Store vector embedding
@@ -104,13 +90,16 @@ async def extract_and_store_facts(session_id: str, messages: list[dict]) -> int:
                     memory_type="fact",
                 )
                 saved += 1
+            
+            # Commit the entire batch of facts and embeddings atomically
+            db.commit()
 
         if saved > 0:
             logger.info("Extracted %d new facts from session %s", saved, session_id[:8])
         return saved
 
     except json.JSONDecodeError:
-        logger.warning("Fact extractor returned invalid JSON: %s", response[:100])
+        logger.warning("Fact extractor returned invalid JSON: %s", result.get("response", "")[:100])
         return 0
     except Exception as exc:
         logger.error("Fact extraction failed: %s", exc)
