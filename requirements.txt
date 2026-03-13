@@ -32,6 +32,7 @@ crewai==0.51.0
 # Web scraping (Phase 4)
 beautifulsoup4==4.12.3
 lxml==5.2.2
+playwright==1.49.1
 
 # Google APIs (Phase 4)
 google-auth==2.30.0

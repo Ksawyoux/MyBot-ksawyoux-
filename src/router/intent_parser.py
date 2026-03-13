@@ -33,8 +33,8 @@ def get_dynamic_system_prompt() -> str:
     base_prompt = INTENT_SYSTEM_PROMPT
     if skills_context:
         base_prompt = base_prompt.replace(
-            '"action":"social|internal_query|email|calendar|search|file|code|reminder|research|plan|clarify|other"',
-            '"action":"social|internal_query|email|calendar|search|file|code|reminder|research|plan|clarify|skill|other",\n  "skill_name": "folder name of skill if action is skill (from list below)"'
+            '"action":"social|internal_query|email|calendar|search|file|code|reminder|research|plan|clarify|web_browse|skill|other"',
+            '"action":"social|internal_query|email|calendar|search|file|code|reminder|research|plan|clarify|web_browse|skill|other",\n  "skill_name": "folder name of skill if action is skill (from list below)"'
         )
         base_prompt += skills_context
         
@@ -70,7 +70,7 @@ def _validate_intent(intent: dict, user_msg: str) -> dict:
     valid_actions = {
         "social", "internal_query", "email", "calendar",
         "search", "file", "code", "reminder", "research",
-        "plan", "clarify", "skill", "other"
+        "plan", "clarify", "web_browse", "skill", "other"
     }
     if action not in valid_actions:
         logger.warning("Invalid action '%s' for: %s", action, user_msg)
@@ -120,6 +120,9 @@ def _fallback_classify(user_msg: str) -> dict:
         tier = "agentic"
     elif "plan" in user_msg_lower:
         action = "plan"
+        tier = "agentic"
+    elif "http" in user_msg_lower or "www." in user_msg_lower or "browse" in user_msg_lower:
+        action = "web_browse"
         tier = "agentic"
     else:
         action = "other"

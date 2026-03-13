@@ -128,6 +128,7 @@ async def execute_crew_task(intent: dict, prompt: str, task_id: int) -> str:
     from src.agents.email_agent import create_email_agent, create_email_task
     from src.agents.research_agent import create_research_agent, create_research_task
     from src.agents.calendar_agent import create_calendar_agent, create_calendar_task
+    from src.agents.web_browsing_agent import create_web_agent, create_web_task
 
     action = intent.get("action", "other")
     llm = _get_crewai_llm("capable") # Deep reasoning
@@ -174,6 +175,12 @@ async def execute_crew_task(intent: dict, prompt: str, task_id: int) -> str:
         agent.tools = tools
         agents.append(agent)
         tasks.append(create_briefing_task(agent, prompt))
+        
+    elif action == "web_browse":
+        agent = create_web_agent(llm)
+        agent.tools = tools
+        agents.append(agent)
+        tasks.append(create_web_task(agent, prompt))
         
     else:
         # Default: general research and assistant

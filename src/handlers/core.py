@@ -96,5 +96,7 @@ def register_core_handlers():
     register_handler("crew_pipeline", crew_pipeline)
     register_handler("agentic_respond", agentic_respond)
     register_handler("handle_scheduling", handle_scheduling)
-    # Placeholder for tool handlers
-    # ...
+    
+    # Register MCP-based Web Tools
+    from src.tools.web_tools import register_web_tools
+    register_web_tools()
