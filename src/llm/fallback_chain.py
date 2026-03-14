@@ -115,7 +115,10 @@ async def call_with_fallback(
             status = exc.response.status_code
             if status == 429:
                 limiter.trigger_cooldown()
-                logger.warning("429 from %s — trying fallback", model)
+                retry_after = int(exc.response.headers.get("Retry-After", 5))
+                wait = min(retry_after, 30)
+                logger.warning("429 from %s — waiting %ds before fallback", model, wait)
+                await asyncio.sleep(wait)
             elif status >= 500:
                 logger.warning("5xx from %s (%d) — trying fallback", model, status)
             else:

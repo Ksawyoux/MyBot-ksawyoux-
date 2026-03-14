@@ -9,6 +9,7 @@ from src.db.connection import get_db
 from src.db.models import MemoryEmbedding
 from src.utils.embeddings import generate_embedding
 from src.utils.logging import get_logger
+from src.config.settings import MEMORY_SEARCH_THRESHOLD as _DEFAULT_THRESHOLD
 
 logger = get_logger(__name__)
 
@@ -39,11 +40,12 @@ async def store_long_term_memory(
         return -1
 
 
-async def search_memory(query_text: str, limit: int = 5, threshold: float = 0.5) -> list[dict]:
+async def search_memory(query_text: str, limit: int = 5, threshold: float | None = None) -> list[dict]:
     """
     Search long-term memory using cosine similarity.
     Returns memories with a distance <= threshold (lower is better, 0 is exact match).
     """
+    effective_threshold = threshold if threshold is not None else _DEFAULT_THRESHOLD
     vector = await generate_embedding(query_text)
     if not vector:
         return []
@@ -58,7 +60,7 @@ async def search_memory(query_text: str, limit: int = 5, threshold: float = 0.5)
                 MemoryEmbedding.type,
                 distance_col
             ).filter(
-                MemoryEmbedding.embedding.cosine_distance(vector) <= threshold
+                MemoryEmbedding.embedding.cosine_distance(vector) <= effective_threshold
             ).order_by(distance_col).limit(limit).all()
 
             results = []

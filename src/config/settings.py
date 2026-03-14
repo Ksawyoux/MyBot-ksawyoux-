@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     TOKEN_THRESHOLD: int = 5000
     APPROVAL_TIMEOUT_HOURS: int = 24
     HEALTH_PORT: int = 8000
+    # Cosine distance threshold for long-term memory search (0=exact, 1=unrelated)
+    MEMORY_SEARCH_THRESHOLD: float = 0.5
 
 
 settings = Settings()
@@ -70,3 +72,4 @@ ENVIRONMENT = settings.ENVIRONMENT
 TOKEN_THRESHOLD = settings.TOKEN_THRESHOLD
 APPROVAL_TIMEOUT_HOURS = settings.APPROVAL_TIMEOUT_HOURS
 HEALTH_PORT = settings.HEALTH_PORT
+MEMORY_SEARCH_THRESHOLD = settings.MEMORY_SEARCH_THRESHOLD

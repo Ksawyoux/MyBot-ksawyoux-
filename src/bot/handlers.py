@@ -209,7 +209,10 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     cache_stats = get_cache_stats()
     conv_stats = get_conversation_stats()
     task_stats = get_task_stats()
+    from src.utils.logging import get_metrics
+    metrics = get_metrics()
 
+    llm_m = metrics.get("llm.complete", {})
     text = (
         "📊 *System Status*\n\n"
         f"*Conversations*\n"
@@ -221,7 +224,11 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"  Tokens: {task_stats.get('tokens_used', 0):,}\n\n"
         f"*Cache*\n"
         f"  Entries: {cache_stats.get('entries', 0)}\n"
-        f"  Tokens saved: {cache_stats.get('tokens_saved', 0):,}\n"
+        f"  Tokens saved: {cache_stats.get('tokens_saved', 0):,}\n\n"
+        f"*LLM (this session)*\n"
+        f"  Calls: {llm_m.get('count', 0)}\n"
+        f"  Errors: {llm_m.get('errors', 0)}\n"
+        f"  Avg latency: {llm_m.get('avg_ms', 0):.0f} ms\n"
     )
     output = OutputBuilder().content_text(text).build()
     msg = TelegramRenderer(user_transparency_tier=TransparencyTier.SILENT).render(output)

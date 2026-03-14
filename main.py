@@ -49,6 +49,14 @@ def shutdown_handler(signum, frame):
     except Exception as e:
         logger.error("Error shutting down LLM Queue: %s", e)
 
+    # 3. Close Playwright browser pool
+    try:
+        import asyncio
+        from src.tools.web_interact import BrowserPool
+        asyncio.get_event_loop().run_until_complete(BrowserPool.close())
+    except Exception as e:
+        logger.error("Error closing browser pool: %s", e)
+
     logger.info("Exiting.")
     sys.exit(0)
 
@@ -73,6 +81,10 @@ def main() -> None:
 
         # Initialize MCP Tools
         init_tools()
+
+        # Pre-warm skill prompt cache so first intent parse doesn't hit disk
+        from src.router.intent_parser import refresh_skill_cache
+        refresh_skill_cache()
 
         # Health server runs in a daemon thread
         health_thread = threading.Thread(
@@ -105,6 +117,19 @@ def main() -> None:
                 replace_existing=True
             )
             logger.info("Registered daily morning briefing job for 08:00.")
+
+        # Hourly cleanup of expired approvals
+        from src.approval.queue import expire_stale_approvals
+        if not scheduler.get_job("expire_approvals"):
+            scheduler.add_job(
+                expire_stale_approvals,
+                trigger="interval",
+                hours=1,
+                id="expire_approvals",
+                name="Expire Stale Approvals",
+                replace_existing=True,
+            )
+            logger.info("Registered hourly approval expiry job.")
 
         # Telegram bot runs on the main thread
         run_bot()

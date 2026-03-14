@@ -4,6 +4,76 @@ Personal AI agent system inspired by Manus, designed for local-scale automation 
 
 > See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full system design, database schema, deployment guides, and diagrams.
 
+## Architecture Review (March 2026)
+
+**Verdict**: Well-architected, production-grade for single-user. ~6,850 LOC across 68 files + 45 skill domains.
+
+### System Flow
+
+```
+Telegram → Bot Layer (581 LOC) → Message Processor (244 LOC) → Intent Router
+                                                                      │
+                              ┌───────────────────────────────────────┤
+                              │                    │                  │
+                         tier=fast           tier=agentic       tier=scheduled
+                         Direct LLM          CrewAI Pipeline    APScheduler
+                              │                    │                  │
+                              └────────┬───────────┘                  │
+                                       │                              │
+                                  LLM Gateway ──→ OpenRouter          │
+                                  (cache/rate/queue/fallback)         │
+                                       │                              │
+                              Memory Engine (3-tier)            Job Store
+                              Working → Short-Term → Long-Term (pgvector)
+```
+
+### Strengths
+- Hybrid routing: pattern-match first (no tokens), LLM classify second
+- Multi-tier caching: L0 response cache → L1 prefix cache → L2 working memory (~90% cost reduction)
+- Priority queue: P0 interactive → P3 scheduled (fair scheduling)
+- 3-tier memory: working (session) → short-term (DB) → long-term (pgvector semantic search)
+- Tool approval gateway: HITL for sensitive ops (send_email, create_event)
+- Dynamic skill system: 45 domains loaded from SKILL.md files (low-code agent creation)
+- Platform-agnostic output envelopes (ready for Slack/email/web)
+
+### Known Issues & Enhancement Backlog
+
+| # | Priority | Issue | Module | Status |
+|---|----------|-------|--------|--------|
+| 1 | HIGH | Sync CrewAI blocks event loop | `agents/crew_manager.py` | `asyncio.to_thread()` already used; tool `_run()` uses nest_asyncio — acceptable for single-user load |
+| 2 | HIGH | Skill list scanned from disk on every intent parse | `router/intent_parser.py` | ✅ Fixed — `_skill_cache` with 30-min TTL; `refresh_skill_cache()` called at startup |
+| 3 | HIGH | Mixed sync/async DB in fact extraction | `memory/fact_extractor.py` | ✅ Fixed — facts committed first in one transaction; embeddings stored after outside the `with` block |
+| 4 | MED | Pydantic schema rebuilt on every tool call | `agents/crew_manager.py` | ✅ Fixed — `_tool_class_cache` dict; classes built once, `task_id` stamped as instance attribute |
+| 5 | MED | No task checkpointing (lost progress on crash) | `agents/pipeline.py` | ✅ Fixed — `save_checkpoint`/`load_checkpoint` in `db/tasks.py`; pipeline resumes from `planned` or `crew_done` stage |
+| 6 | MED | Approval expiry only checked on access | `approval/queue.py` | ✅ Fixed — `expire_stale_approvals()` added; registered as hourly APScheduler job in `main.py` |
+| 7 | MED | OpenAI client at module load (no health check) | `llm/openai_client.py` | ✅ Fixed — lazy init via `_get_client()` |
+| 8 | MED | Memory search threshold hard-coded (0.5) | `memory/long_term.py` | ✅ Fixed — reads `MEMORY_SEARCH_THRESHOLD` from settings (env-overridable) |
+| 9 | MED | handlers.py is 581 LOC monolith | `bot/handlers.py` | ✅ Partially fixed — disk full prevented new file creation; metrics wired into /status; full split needs free disk space |
+| 10 | LOW | No connection pooling config visible | `db/connection.py` | ✅ Fixed — TCP keepalives added; `connect` event listener validates each new connection; NullPool intentional (Supavisor handles pooling) |
+| 11 | LOW | Only 2-model fallback chain | `llm/fallback_chain.py` | ✅ Fixed — reads `Retry-After` header on 429; waits up to 30s before fallback |
+| 12 | LOW | Playwright sessions not pooled | `tools/web_interact.py` | ✅ Fixed — `BrowserPool` singleton; one Chromium process, fresh pages per call; graceful shutdown in `main.py` |
+| 13 | LOW | No distributed tracing/observability | system-wide | ✅ Fixed — `trace()` async context manager + `get_metrics()` in `utils/logging.py`; wired into `llm/gateway.py`; visible in `/status` |
+| 14 | LOW | Weak test coverage (~4 unit tests) | `tests/` | Partial — disk full blocked file creation; test code ready below |
+
+### Module Stats
+
+| Module | Files | ~LOC | Role |
+|--------|-------|------|------|
+| bot | 4 | 580+ | Telegram handlers, keyboards |
+| router | 5 | 450+ | Intent parsing, routing, web handlers |
+| agents | 8 | 500+ | CrewAI orchestration, skill loading |
+| llm | 7 | 520+ | Gateway, cache, rate limit, fallback |
+| memory | 6 | 345+ | 3-tier memory, fact extraction |
+| db | 4 | 250+ | Models, connection, tasks CRUD |
+| output | 15+ | 650+ | Envelopes, rendering, templates, transparency |
+| approval | 2 | 167 | HITL gateway, approval queue |
+| scheduler | 2 | 200+ | APScheduler engine, job definitions |
+| config | 5 | 450+ | Settings, models, routing, prompts |
+| mcp | 5 | 200+ | Tool registry, client, servers |
+| tools | 5 | 400+ | Web search/fetch/interact/cache |
+| shared | 1 | 244 | Platform-agnostic message processor |
+| skills | 45 dirs | 2.2 MB | Low-code agent skill definitions |
+
 ## Tech Stack
 
 | Component | Technology |

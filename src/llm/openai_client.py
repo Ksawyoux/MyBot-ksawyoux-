@@ -10,11 +10,19 @@ from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Initialize client
-client = openai.AsyncOpenAI(
-    api_key=OPENAI_API_KEY,
-    base_url=OPENAI_BASE_URL,
-)
+# Lazy-initialized client — avoids connection errors at import time
+# and lets startup health checks happen before any LLM call is made.
+_client: openai.AsyncOpenAI | None = None
+
+
+def _get_client() -> openai.AsyncOpenAI:
+    global _client
+    if _client is None:
+        _client = openai.AsyncOpenAI(
+            api_key=OPENAI_API_KEY,
+            base_url=OPENAI_BASE_URL,
+        )
+    return _client
 
 async def chat_openai(
     user_message: str,
@@ -56,7 +64,7 @@ async def chat_openai(
     if tools:
         payload["tools"] = tools
 
-    response = await client.chat.completions.create(**payload)
+    response = await _get_client().chat.completions.create(**payload)
 
     # Check cache hit
     usage = response.usage

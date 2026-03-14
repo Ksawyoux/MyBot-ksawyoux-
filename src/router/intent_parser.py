@@ -10,26 +10,37 @@ from src.config.prompts import INTENT_SYSTEM_PROMPT
 
 logger = get_logger(__name__)
 
-def get_dynamic_system_prompt() -> str:
+# Cache skill prompt so we don't scan disk on every intent parse.
+# Refreshed once per session startup via refresh_skill_cache(), or after 30 min.
+import time as _time
+_skill_cache: dict = {"prompt": None, "ts": 0.0}
+_SKILL_CACHE_TTL = 1800  # 30 minutes
+
+
+def refresh_skill_cache() -> None:
+    """Force-rebuild the skill list cache. Call once at startup."""
+    global _skill_cache
     import os
     skills_dir = os.path.join(os.path.dirname(__file__), "..", "skills")
     skills_context = ""
-    
+
     if os.path.exists(skills_dir):
         from src.agents.skill_loader import parse_skill_markdown
         skills = []
-        for item in os.listdir(skills_dir):
+        for item in sorted(os.listdir(skills_dir)):
             skill_path = os.path.join(skills_dir, item)
             if os.path.isdir(skill_path):
                 skill_file = os.path.join(skill_path, "SKILL.md")
                 if os.path.exists(skill_file):
-                    parsed = parse_skill_markdown(skill_file)
-                    # We use the folder name as the key/identifier for reliability
-                    skills.append(f"- {item}: {parsed.get('description', '')}")
-        
+                    try:
+                        parsed = parse_skill_markdown(skill_file)
+                        skills.append(f"- {item}: {parsed.get('description', '')}")
+                    except Exception:
+                        pass
+
         if skills:
             skills_context = "\n\nInstalled Skills available for action='skill':\n" + "\n".join(skills)
-            
+
     base_prompt = INTENT_SYSTEM_PROMPT
     if skills_context:
         base_prompt = base_prompt.replace(
@@ -37,8 +48,20 @@ def get_dynamic_system_prompt() -> str:
             '"action":"social|internal_query|email|calendar|search|file|code|reminder|research|plan|clarify|web_browse|skill|other",\n  "skill_name": "folder name of skill if action is skill (from list below)"'
         )
         base_prompt += skills_context
-        
-    return base_prompt
+
+    _skill_cache["prompt"] = base_prompt
+    _skill_cache["ts"] = _time.monotonic()
+    logger.info("Skill prompt cache refreshed (%d skills).", skills_context.count("\n- "))
+
+
+def get_dynamic_system_prompt() -> str:
+    """Return the skill-enriched system prompt, rebuilding from disk only if stale."""
+    if (
+        _skill_cache["prompt"] is None
+        or (_time.monotonic() - _skill_cache["ts"]) > _SKILL_CACHE_TTL
+    ):
+        refresh_skill_cache()
+    return _skill_cache["prompt"]
 
 
 def _clean_json_response(text: str) -> str:

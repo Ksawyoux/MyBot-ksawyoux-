@@ -49,6 +49,11 @@ async def extract_and_store_facts(session_id: str, messages: list[dict]) -> int:
             return 0
 
         saved = 0
+        # Collect embeddings to store AFTER the facts are committed.
+        # This decouples the two DB writes: facts commit atomically first,
+        # embeddings are best-effort and won't roll back committed facts.
+        pending_embeddings: list[tuple[str, dict, str]] = []
+
         with get_db() as db:
             for fact_data in parsed:
                 cat = fact_data.get("category", "knowledge")
@@ -69,7 +74,6 @@ async def extract_and_store_facts(session_id: str, messages: list[dict]) -> int:
                 if exist:
                     continue
 
-                # Save fact
                 fact = Fact(
                     category=cat,
                     key=key,
@@ -77,19 +81,20 @@ async def extract_and_store_facts(session_id: str, messages: list[dict]) -> int:
                     source_session=session_id
                 )
                 db.add(fact)
-                db.flush() # Flush to get fact ID for embeddings, but don't commit yet
-                fact_id = fact.id
+                db.flush()  # Get auto-assigned fact.id before commit
 
-                # Store vector embedding
-                await store_long_term_memory(
-                    content=f"User {cat} - {key}: {val}",
-                    metadata={"fact_id": fact_id, "category": cat, "key": key},
-                    memory_type="fact",
-                )
+                pending_embeddings.append((
+                    f"User {cat} - {key}: {val}",
+                    {"fact_id": fact.id, "category": cat, "key": key},
+                    "fact",
+                ))
                 saved += 1
-            
-            # Commit the entire batch of facts and embeddings atomically
+            # facts committed here; embeddings stored below in a separate transaction
             db.commit()
+
+        # Store embeddings after facts are safely committed
+        for content, metadata, memory_type in pending_embeddings:
+            await store_long_term_memory(content=content, metadata=metadata, memory_type=memory_type)
 
         if saved > 0:
             logger.info("Extracted %d new facts from session %s", saved, session_id[:8])

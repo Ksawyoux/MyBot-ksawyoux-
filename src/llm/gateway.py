@@ -10,7 +10,7 @@ from src.llm.cache import get_cached_response, store_cached_response
 from src.llm.model_router import get_model_router
 from src.llm.fallback_chain import call_with_fallback, stream_with_fallback
 from src.llm.request_queue import get_request_queue, PRIORITY_BACKGROUND
-from src.utils.logging import get_logger
+from src.utils.logging import get_logger, trace
 
 logger = get_logger(__name__)
 
@@ -57,15 +57,16 @@ async def complete(
 
         # ── Call LLM with fallback ────────────────────────────────────────────────
         start = time.monotonic()
-        response_text, model_used, tokens = await call_with_fallback(
-            messages=messages,
-            primary_model=primary_model,
-            fallback_model=fallback_model,
-            max_tokens=max_tokens,
-            response_format=response_format,
-            metadata=metadata,
-            tools=tools,
-        )
+        async with trace("llm.complete", tier=model_tier, model=primary_model):
+            response_text, model_used, tokens = await call_with_fallback(
+                messages=messages,
+                primary_model=primary_model,
+                fallback_model=fallback_model,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                metadata=metadata,
+                tools=tools,
+            )
         latency_ms = int((time.monotonic() - start) * 1000)
 
         logger.info(

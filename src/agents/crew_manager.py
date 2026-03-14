@@ -16,86 +16,92 @@ logger = get_logger(__name__)
 
 from crewai.tools import BaseTool
 
+# Cache of already-built tool classes keyed by tool name.
+# Avoids rebuilding Pydantic models + dynamic classes on every crew execution.
+_tool_class_cache: dict[str, BaseTool] = {}
+
+
+def _build_tool_class(name: str, meta: dict) -> type[BaseTool]:
+    """
+    Build (once) a CrewAI BaseTool subclass for a single MCP tool.
+    task_id is stored as an instance attribute set at instantiation time.
+    """
+    from pydantic import create_model
+    from typing import Optional
+
+    schema = meta.get("parameters", {})
+    properties = schema.get("properties", {})
+    required_fields = schema.get("required", [])
+
+    _type_map = {
+        "string": str, "integer": int, "number": float,
+        "boolean": bool, "array": list, "object": dict,
+    }
+    fields: dict = {}
+    for prop_name, prop_info in properties.items():
+        prop_type = _type_map.get(prop_info.get("type", "string"), Any)
+        desc = prop_info.get("description", "")
+        if prop_name in required_fields:
+            fields[prop_name] = (prop_type, Field(..., description=desc))
+        else:
+            fields[prop_name] = (Optional[prop_type], Field(prop_info.get("default"), description=desc))
+
+    schema_cls_name = "".join(p.capitalize() for p in name.split("_")) + "Schema"
+    SchemaClass = create_model(schema_cls_name, **fields)
+
+    class MCPWrappedTool(BaseTool):
+        args_schema: type[BaseModel] = SchemaClass
+        # task_id is set on the instance after construction
+        _task_id: int = 0
+
+        def _run(self, **kwargs: Any) -> Any:
+            import asyncio
+            import json
+
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            if loop.is_running():
+                import nest_asyncio
+                nest_asyncio.apply()
+
+            result = asyncio.run(wrap_tool_execution(self.name, kwargs, self._task_id))
+
+            if isinstance(result, dict) and result.get("status") == "pending_approval":
+                return (
+                    f"Action '{self.name}' has been intercepted and requires human approval. "
+                    f"Approval ID: {result.get('approval_id')}. "
+                    "Do NOT retry this action. "
+                    "Please provide your Final Answer confirming that the action has been submitted for approval."
+                )
+            return json.dumps(result) if isinstance(result, dict) else str(result)
+
+    tool_class_name = "".join(p.capitalize() for p in name.split("_")) + "Tool"
+    MCPWrappedTool.__name__ = tool_class_name
+    return MCPWrappedTool
+
+
 def _create_langchain_tools(task_id: int) -> list[BaseTool]:
     """
-    Wrap our MCP tools in CrewAI BaseTool objects.
+    Wrap MCP tools as CrewAI BaseTool objects.
+    Tool classes are built once and cached; task_id is stamped on each fresh instance.
     """
     mcp_client = get_mcp_client()
     tools = mcp_client._tools
     logger.info("CrewAI loading %d registered MCP tools.", len(tools))
-    
+
     lc_tools = []
-
     for name, meta in tools.items():
-        # Build Pydantic args_schema manually from JSON Schema parameters
-        from pydantic import create_model
-        from typing import Optional
-        fields = {}
-        schema = meta.get("parameters", {})
-        properties = schema.get("properties", {})
-        required_fields = schema.get("required", [])
-        
-        for prop_name, prop_info in properties.items():
-            prop_type_str = prop_info.get("type", "string")
-            type_mapping = {
-                "string": str,
-                "integer": int,
-                "number": float,
-                "boolean": bool,
-                "array": list,
-                "object": dict
-            }
-            prop_type = type_mapping.get(prop_type_str, Any)
-            description = prop_info.get("description", "")
-            
-            if prop_name in required_fields:
-                fields[prop_name] = (prop_type, Field(..., description=description))
-            else:
-                opt_type = Optional[prop_type]
-                default_val = prop_info.get("default", None)
-                fields[prop_name] = (opt_type, Field(default_val, description=description))
-                
-        # Must be careful not to reuse the same class name incorrectly, use a unique name
-        tool_schema_name = "".join(part.capitalize() for part in name.split("_")) + "Schema"
-        SchemaClass = create_model(tool_schema_name, **fields)
+        if name not in _tool_class_cache:
+            _tool_class_cache[name] = _build_tool_class(name, meta)
+        tool_cls = _tool_class_cache[name]
+        instance = tool_cls(name=name, description=meta["description"])
+        instance._task_id = task_id
+        lc_tools.append(instance)
 
-        # Define a dynamic class to satisfy CrewAI's requirement for BaseTool subclasses
-        # We must use a unique class name or just subclass locally
-        custom_tool_name = "".join(part.capitalize() for part in name.split("_")) + "Tool"
-        
-        class MCPWrappedTool(BaseTool):
-            args_schema: type[BaseModel] = SchemaClass
-
-            def _run(self, **kwargs: Any) -> Any:
-                import asyncio
-                try:
-                    loop = asyncio.get_event_loop()
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                
-                if loop.is_running():
-                    import nest_asyncio
-                    nest_asyncio.apply()
-                
-                # We can access `self.name` because it is set by BaseTool __init__
-                result = asyncio.run(wrap_tool_execution(self.name, kwargs, task_id))
-                
-                if isinstance(result, dict) and result.get("status") == "pending_approval":
-                    return (
-                        f"Action '{self.name}' has been intercepted and requires human approval. "
-                        f"Approval ID: {result.get('approval_id')}. "
-                        "Do NOT retry this action. "
-                        "Please provide your Final Answer confirming that the action has been submitted for approval."
-                    )
-                import json
-                return json.dumps(result) if isinstance(result, dict) else str(result)
-        
-        # Override the __name__ to be unique
-        MCPWrappedTool.__name__ = custom_tool_name
-
-        lc_tools.append(MCPWrappedTool(name=name, description=meta["description"]))
-        
     return lc_tools
 
 

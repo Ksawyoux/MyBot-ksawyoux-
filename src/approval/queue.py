@@ -90,6 +90,27 @@ def get_pending_approvals() -> list[dict]:
         logger.error("Failed to fetch pending approvals: %s", exc)
         return []
 
+def expire_stale_approvals() -> int:
+    """Mark expired pending approvals. Call from the background scheduler periodically."""
+    try:
+        with get_db() as db:
+            now = datetime.utcnow()
+            stale = db.query(Approval).filter(
+                Approval.status == 'pending',
+                Approval.expires_at <= now
+            ).all()
+            for app in stale:
+                app.status = 'expired'
+                app.responded_at = func.now()
+            db.commit()
+            if stale:
+                logger.info("Expired %d stale approvals.", len(stale))
+            return len(stale)
+    except Exception as exc:
+        logger.error("Failed to expire stale approvals: %s", exc)
+        return 0
+
+
 def get_approval(approval_id: int) -> Optional[dict]:
     """Fetch details of a specific approval."""
     try:

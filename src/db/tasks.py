@@ -87,6 +87,28 @@ def get_recent_tasks(limit: int = 10) -> list[dict]:
         return []
 
 
+def save_checkpoint(task_id: int, data: dict) -> None:
+    try:
+        with get_db() as db:
+            task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
+            if task:
+                task.checkpoint = data
+                db.commit()
+    except Exception as exc:
+        logger.error("Failed to save checkpoint for task %d: %s", task_id, exc)
+
+
+def load_checkpoint(task_id: int) -> dict | None:
+    try:
+        with get_db() as db:
+            task = db.query(TaskModel).filter(TaskModel.id == task_id).first()
+            if task and task.checkpoint:
+                return task.checkpoint
+    except Exception as exc:
+        logger.error("Failed to load checkpoint for task %d: %s", task_id, exc)
+    return None
+
+
 def get_task_stats() -> dict:
     """Aggregate stats for /status command."""
     try:
