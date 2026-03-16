@@ -117,8 +117,79 @@ async def test_parse_intent_llm_fails_triggering_fallback(mock_complete, mock_ge
 @patch('src.llm.gateway.complete')
 async def test_parse_intent_llm_throws_exception_triggering_fallback(mock_complete, mock_get_sys):
     mock_complete.side_effect = Exception("API Server down")
-    
+
     intent = await parse_intent("yo what is up")
     assert intent["tier"] == "fast"
     assert intent["action"] == "social"
     assert intent["thought"] == "Social greeting"
+
+
+# ── classify_fast() tests ─────────────────────────────────────────────────────
+
+from src.router.intent_parser import classify_fast
+
+
+def test_classify_fast_full_url():
+    """A message containing an https:// URL → web_browse."""
+    result = classify_fast("check out https://example.com for me")
+    assert result is not None
+    assert result["action"] == "web_browse"
+    assert result["tier"] == "agentic"
+
+
+def test_classify_fast_domain_style_url():
+    """domain.com style strings are detected as URLs → web_browse."""
+    result = classify_fast("go to openai.com and tell me what you see")
+    assert result is not None
+    assert result["action"] == "web_browse"
+
+
+def test_classify_fast_browse_keyword():
+    """Explicit browse verbs trigger web_browse without a URL."""
+    for phrase in ["browse the news", "visit their homepage", "open that link"]:
+        result = classify_fast(phrase)
+        assert result is not None, f"Expected a result for: {phrase}"
+        assert result["action"] == "web_browse", f"Wrong action for: {phrase}"
+
+
+def test_classify_fast_search_keyword():
+    """Search-intent phrases → search action."""
+    for phrase in ["search for python tutorials", "look up the weather today", "find me a recipe"]:
+        result = classify_fast(phrase)
+        assert result is not None, f"Expected a result for: {phrase}"
+        assert result["action"] == "search", f"Wrong action for: {phrase}"
+
+
+def test_classify_fast_social_greeting():
+    """Single social words → fast/social."""
+    for word in ["hi", "hello", "hey", "yo", "gm", "bye"]:
+        result = classify_fast(word)
+        assert result is not None, f"Expected a result for: {word}"
+        assert result["tier"] == "fast"
+        assert result["action"] == "social"
+
+
+def test_classify_fast_no_match_returns_none():
+    """Generic questions that need LLM classification return None."""
+    result = classify_fast("explain the difference between TCP and UDP protocols in detail")
+    assert result is None
+
+
+def test_classify_fast_uses_fast_path_in_parse_intent():
+    """parse_intent must return immediately for pattern-matched messages (no LLM call)."""
+    import asyncio
+    from unittest.mock import patch, AsyncMock
+
+    with patch("src.llm.gateway.complete", new_callable=AsyncMock) as mock_llm:
+        result = asyncio.get_event_loop().run_until_complete(parse_intent("hi"))
+        mock_llm.assert_not_called()
+    assert result["tier"] == "fast"
+    assert result["action"] == "social"
+
+
+def test_classify_fast_internal_query():
+    """Messages about scheduled tasks trigger internal_query."""
+    result = classify_fast("show my tasks for today")
+    assert result is not None
+    assert result["action"] == "internal_query"
+    assert result["tier"] == "fast"

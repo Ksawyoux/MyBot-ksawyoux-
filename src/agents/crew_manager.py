@@ -4,7 +4,6 @@ src/agents/crew_manager.py — Orchestrates CrewAI agents and tools
 
 from typing import Any
 from crewai import Crew, Process
-from langchain_core.tools import Tool
 from pydantic import BaseModel, Field
 
 from src.mcp.client import get_mcp_client
