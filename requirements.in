@@ -36,6 +36,7 @@ tiktoken==0.7.0
 # ── Core: Utilities ───────────────────────────────────────────
 python-dateutil==2.9.0.post0
 croniter==2.0.5
+apscheduler>=3.10.4,<4.0
 
 # ── Agents: CrewAI ────────────────────────────────────────────
 crewai>=1.0.0
