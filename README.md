@@ -31,7 +31,7 @@ graph TD
     User((User)) <--> Telegram[Telegram Bot Layer]
     Telegram <--> Router{Hybrid Router}
     
-    Router -->|Low Latency| FastLLM[Fast Response Chain (SSE Streaming)]
+    Router -->|Low Latency| FastLLM["Fast Response Chain (SSE Streaming)"]
     Router -->|Deep Reasoning| Agentic[CrewAI Multi-Agent Pipeline]
     Router -->|Extensibility| MCP[MCP Client / Tools Registry]
     Router -->|Retention| Memory[Memory Sync Engine]
